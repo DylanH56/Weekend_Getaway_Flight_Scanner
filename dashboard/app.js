@@ -212,7 +212,43 @@ async function main() {
     ? new Date(payload.generated_at).toLocaleString("en-IE")
     : "unknown";
 
-  const markerLayer = L.layerGroup().addTo(map);
+  // Marker cluster group: collapses nearby price badges into a
+  // single "N deals here" cluster at low zoom so the map doesn't
+  // drown in overlapping badges (London has 4 airports worth of
+  // clutter alone). At city zoom everything expands back to
+  // individual badges. Uses the plugin loaded via CDN in index.html;
+  // falls back to a plain layerGroup if the plugin isn't available
+  // (e.g. offline first load before the SW cached it).
+  const markerLayer =
+    typeof L.markerClusterGroup === "function"
+      ? L.markerClusterGroup({
+          maxClusterRadius: 45,
+          disableClusteringAtZoom: 7,
+          showCoverageOnHover: false,
+          spiderfyOnMaxZoom: true,
+          iconCreateFunction: (cluster) => {
+            const count = cluster.getChildCount();
+            // Pick the cheapest deal in this cluster so the cluster
+            // label shows the best available price, not the count.
+            let cheapest = Infinity;
+            cluster.getAllChildMarkers().forEach((m) => {
+              const p = m.options._dealPrice;
+              if (typeof p === "number" && p < cheapest) cheapest = p;
+            });
+            const label =
+              isFinite(cheapest) && cheapest < Infinity
+                ? `&euro;${Math.round(cheapest)}`
+                : `${count}`;
+            return L.divIcon({
+              html: `<div class="price-badge cluster">${label} <span class="count">&middot;${count}</span></div>`,
+              className: "",
+              iconSize: null,
+              iconAnchor: [30, 14],
+            });
+          },
+        })
+      : L.layerGroup();
+  markerLayer.addTo(map);
 
   // Track which destination the user has clicked on the map. When set,
   // the sidebar is filtered to show only deals for that IATA, across
@@ -342,7 +378,12 @@ async function main() {
 
       const marker = L.marker(
         [deal.destination_lat, deal.destination_lon],
-        { icon, riseOnHover: true, title: deal.destination_city || deal.destination_iata }
+        {
+          icon,
+          riseOnHover: true,
+          title: deal.destination_city || deal.destination_iata,
+          _dealPrice: price,  // consumed by the cluster icon factory
+        }
       );
 
       marker.on("click", () => {
@@ -446,6 +487,80 @@ async function main() {
   $("clear-destination").addEventListener("click", () => {
     selectedDestination = null;
     render();
+  });
+
+  // Recommend-me button: picks 3 deals weighted towards
+  // "cheap + sunny", scrolls the sidebar to the first, highlights
+  // all three, and pans the map to fit them. Uses whatever deals
+  // pass the current filters so origin / slider / window settings
+  // still apply.
+  $("recommend-me").addEventListener("click", () => {
+    const f = currentFilters();
+    const candidates = applyFilters(payload.deals, f);
+    if (candidates.length === 0) return;
+
+    // Score each candidate: lower is better.
+    //   base    = flight price
+    //   weather = bonus if weather code is clear-ish (emoji starts
+    //             with a sun or partly cloudy symbol)
+    //   cheap-bias = divide by a random factor so the same set of
+    //                "best" deals doesn't come up every click
+    const scored = candidates.map((d) => {
+      const price = dealPrice(d);
+      let score = price;
+      const emoji = d.weather_emoji || "";
+      // Sun / clear / partly-cloudy -> score bonus.
+      if (emoji.includes("\u2600") || emoji.includes("\u26C5")) score -= 15;
+      // Overcast / fog -> small penalty.
+      if (emoji.includes("\u2601") || emoji.includes("\U0001F32B")) score += 5;
+      // Any kind of rain -> heavier penalty.
+      if (emoji.includes("\U0001F327") || emoji.includes("\U0001F326")) score += 15;
+      // Thunder -> big penalty.
+      if (emoji.includes("\u26C8")) score += 25;
+      // Tiny random jitter so repeated clicks surface variety.
+      score += Math.random() * 20;
+      return { deal: d, score };
+    });
+    scored.sort((a, b) => a.score - b.score);
+    const picks = scored.slice(0, 3).map((s) => s.deal);
+
+    // Clear any prior destination filter and re-render with just
+    // these three highlighted at the top.
+    selectedDestination = null;
+    render();
+    // Highlight the three picks after render has populated the list.
+    setTimeout(() => {
+      const cards = listEl.querySelectorAll(".deal");
+      const pickKeys = new Set(
+        picks.map(
+          (p) =>
+            `${p.carrier_code}|${p.origin}|${p.destination_iata}|${p.outbound_departure}`
+        )
+      );
+      cards.forEach((card, i) => {
+        const d = picks[0] && candidates[i];
+        // Best-effort: highlight any card whose deal matches a pick.
+      });
+      // Scroll first pick into view and highlight it directly.
+      const firstPick = picks[0];
+      const firstCard = Array.from(cards).find((card) => {
+        const title = card.querySelector(".city")?.textContent || "";
+        return title.includes(firstPick.destination_city || firstPick.destination_iata);
+      });
+      if (firstCard) {
+        firstCard.scrollIntoView({ behavior: "smooth", block: "center" });
+        picks.forEach((p) => {
+          const matchCard = Array.from(cards).find((card) => {
+            const title = card.querySelector(".city")?.textContent || "";
+            return title.includes(p.destination_city || p.destination_iata);
+          });
+          if (matchCard) {
+            matchCard.classList.add("highlighted");
+            setTimeout(() => matchCard.classList.remove("highlighted"), 3500);
+          }
+        });
+      }
+    }, 50);
   });
 
   // Mobile sidebar toggle: on narrow screens the sidebar slides in

@@ -214,6 +214,29 @@ main {
   border-color: #38bdf8;
 }
 
+.recommend-btn {
+  display: block;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+  color: #f8fafc;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform .1s, box-shadow .15s;
+  box-shadow: 0 2px 8px rgba(14, 165, 233, .25);
+}
+.recommend-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(14, 165, 233, .4);
+}
+.recommend-btn:active {
+  transform: translateY(0);
+}
+
 /* Google-Flights-Explore-style price badge markers on the map */
 .price-badge {
   background: #0f172a;
@@ -252,6 +275,30 @@ main {
   border-color: #38bdf8;
   transform: scale(1.1);
   z-index: 999;
+}
+.price-badge.cluster {
+  background: #0f172a;
+  color: #f8fafc;
+  border: 2px solid #38bdf8;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+.price-badge.cluster .count {
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 500;
+  margin-left: 2px;
+}
+
+/* Hide the plugin's default circle cluster icon -- we use our own
+ * divIcon. The plugin stamps a .marker-cluster wrapper around the
+ * icon HTML which has its own ::before / ::after artifacts. */
+.marker-cluster {
+  background: transparent !important;
+}
+.marker-cluster div {
+  background: transparent !important;
+  border: none !important;
 }
 
 /* Cleaner Leaflet DivIcon defaults for our badges */
