@@ -17,7 +17,7 @@
 // Bump this whenever the dashboard shell (html/css/js) changes so
 // users pick up the new files on next reload. Old caches get pruned
 // in the activate hook.
-const CACHE_VERSION = "v3-search-share-booking";
+const CACHE_VERSION = "v4-sparklines-bestweek-compare";
 const SHELL_CACHE = `shell-${CACHE_VERSION}`;
 const DATA_CACHE = `data-${CACHE_VERSION}`;
 const PHOTO_CACHE = `photos-${CACHE_VERSION}`;
@@ -61,8 +61,13 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
 
-  // deals.json: network-first with cache fallback.
-  if (url.pathname.endsWith("/deals.json")) {
+  // deals.json and history.json: network-first with cache fallback.
+  // Both are updated on every scan and we always want the freshest
+  // version if the network is up.
+  if (
+    url.pathname.endsWith("/deals.json") ||
+    url.pathname.endsWith("/history.json")
+  ) {
     event.respondWith(
       fetch(request)
         .then((resp) => {

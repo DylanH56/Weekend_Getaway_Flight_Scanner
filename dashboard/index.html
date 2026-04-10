@@ -46,6 +46,19 @@
         <button id="recommend-me" class="recommend-btn">
           &#127793; Recommend me 3 good ones
         </button>
+        <div class="view-mode-row">
+          <label class="view-mode-pill">
+            <input type="radio" name="view-mode" value="all" checked>
+            <span>All weekends</span>
+          </label>
+          <label class="view-mode-pill">
+            <input type="radio" name="view-mode" value="best">
+            <span>Best weekend per city</span>
+          </label>
+        </div>
+        <button id="open-compare" class="compare-tray-btn" style="display:none;">
+          &#x1F4CA; Compare <span id="compare-count">0</span>
+        </button>
         <div class="search-row">
           <input type="search" id="search-box" placeholder="Search city or country&hellip;" autocomplete="off" spellcheck="false">
         </div>
@@ -102,6 +115,16 @@
   </main>
 
   <div id="toast" role="status" aria-live="polite"></div>
+
+  <div id="compare-modal" class="compare-modal" style="display:none;" aria-hidden="true">
+    <div class="compare-modal-inner">
+      <div class="compare-modal-header">
+        <h2>Compare Deals</h2>
+        <button id="close-compare" class="compare-close-btn" aria-label="Close comparison">&times;</button>
+      </div>
+      <div id="compare-grid" class="compare-grid"></div>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
           integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="

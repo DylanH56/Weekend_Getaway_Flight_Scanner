@@ -81,6 +81,64 @@ main {
   letter-spacing: 1px;
 }
 
+.view-mode-row {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 2px;
+}
+.view-mode-pill {
+  flex: 1;
+  cursor: pointer;
+  user-select: none;
+}
+.view-mode-pill input[type="radio"] {
+  display: none;
+}
+.view-mode-pill span {
+  display: block;
+  text-align: center;
+  padding: 6px 4px;
+  font-size: 11px;
+  color: #94a3b8;
+  border-radius: 4px;
+  transition: background-color .12s, color .12s;
+}
+.view-mode-pill input[type="radio"]:checked + span {
+  background: #0ea5e9;
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.compare-tray-btn {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: #7c3aed;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.compare-tray-btn:hover {
+  background: #8b5cf6;
+}
+.compare-tray-btn #compare-count {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.25);
+  padding: 1px 7px;
+  border-radius: 999px;
+  margin-left: 4px;
+}
+
 .search-row {
   margin: 10px 0 8px;
 }
@@ -790,4 +848,175 @@ main {
   body.sidebar-open .sidebar-toggle {
     border-color: #38bdf8;
   }
+}
+
+/* ---------- Sparkline (price history on each card) ---------- */
+.sparkline-wrap {
+  margin-top: 4px;
+  opacity: 0.85;
+  line-height: 0;  /* prevents extra vertical space below the SVG */
+}
+.sparkline {
+  display: block;
+}
+
+/* ---------- Compare checkbox (on each card) ---------- */
+.compare-check {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+.compare-check input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #8b5cf6;
+  cursor: pointer;
+}
+
+/* ---------- Compare modal overlay ---------- */
+.compare-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 7, 18, 0.85);
+  backdrop-filter: blur(4px);
+  z-index: 9998;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 20px 20px;
+  overflow-y: auto;
+}
+.compare-modal-inner {
+  background: #0b1220;
+  border: 1px solid #1f2a44;
+  border-radius: 12px;
+  max-width: 1100px;
+  width: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+}
+.compare-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  border-bottom: 1px solid #1f2a44;
+}
+.compare-modal-header h2 {
+  margin: 0;
+  font-size: 16px;
+  color: #f1f5f9;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.compare-close-btn {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.compare-close-btn:hover {
+  color: #f1f5f9;
+}
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  padding: 20px;
+  overflow-y: auto;
+}
+.compare-card {
+  background: #111a2e;
+  border: 1px solid #1f2a44;
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+.compare-card.has-photo {
+  background-size: cover;
+  background-position: center;
+  position: relative;
+  color: #f1f5f9;
+}
+.compare-card.has-photo::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(11, 18, 32, 0.75), rgba(11, 18, 32, 0.95));
+  border-radius: 8px;
+}
+.compare-card.has-photo > * {
+  position: relative;
+  z-index: 1;
+}
+.compare-card .cc-city {
+  font-size: 17px;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+.compare-card .cc-price {
+  font-size: 22px;
+  font-weight: 700;
+  color: #38bdf8;
+}
+.compare-card .cc-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 0;
+  border-bottom: 1px dashed #1f2a44;
+}
+.compare-card .cc-row:last-child {
+  border-bottom: none;
+}
+.compare-card .cc-label {
+  color: #94a3b8;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.compare-card .cc-value {
+  text-align: right;
+  font-weight: 500;
+}
+.compare-card .cc-remove {
+  align-self: flex-end;
+  background: #1f2a44;
+  color: #f87171;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+.compare-card .cc-remove:hover {
+  background: #7f1d1d;
+  color: #fca5a5;
+}
+.compare-empty {
+  text-align: center;
+  color: #64748b;
+  padding: 40px 20px;
+  font-size: 14px;
+  grid-column: 1 / -1;
+}
+
+/* Adjust card top-left to accommodate sparkline without cramping */
+.deal .top {
+  align-items: flex-start;
+}
+.deal .top-left {
+  flex: 1;
+  min-width: 0;
 }

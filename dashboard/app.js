@@ -192,6 +192,23 @@ const CURRENCY_SYMBOLS = { EUR: "\u20ac", GBP: "\u00a3", USD: "$" };
 let fxRates = { EUR: 1.0, GBP: 0.85, USD: 1.08 };  // sane fallback
 let activeCurrency = "EUR";
 
+// Price-history data loaded in main(). Keyed by dealKey() (which
+// matches history.py's route_key format exactly). Empty {} until
+// loadHistory() resolves. Module-level so renderDealCard() can
+// read it without being threaded through every call site.
+let historyByKey = {};
+
+// Comparison tray: Set of dealKey strings the user has checked for
+// side-by-side comparison. Capped at COMPARE_MAX_ITEMS deals to
+// keep the modal usable. Persists across filter changes so you can
+// check deals in different views.
+const COMPARE_MAX_ITEMS = 3;
+let comparedKeys = new Set();
+
+// Display mode: "all" shows every matching deal, "best" collapses
+// by destination and shows only the cheapest weekend per city.
+let displayMode = "all";
+
 async function loadExchangeRates() {
   const cached = localStorage.getItem(CURRENCY_STORAGE_KEY);
   const today = new Date().toISOString().slice(0, 10);
@@ -359,6 +376,79 @@ async function loadDeals() {
   return res.json();
 }
 
+// Load the scanner's price-history file if present. Returns an empty
+// object on any failure (file not found, JSON parse error, network
+// blip) so sparkline rendering degrades gracefully -- a card with no
+// history just shows no sparkline, nothing else breaks.
+async function loadHistory() {
+  try {
+    const res = await fetch("history.json", { cache: "no-store" });
+    if (!res.ok) return {};
+    const data = await res.json();
+    return (data && typeof data === "object") ? data : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+// Render a compact inline SVG sparkline for a list of price
+// observations. Returns "" if there are fewer than 2 points (nothing
+// to draw). Widely supported across browsers; no external lib.
+//
+//   observations: array of [iso_ts, price] pairs (history.json format)
+//   width/height: SVG viewBox dimensions in pixels
+//
+// The path is a polyline normalized against the min/max range so
+// the sparkline is always fully visible regardless of actual prices.
+// Last point gets a filled circle so "current" stands out from the
+// trend line.
+function sparklineSvg(observations, width = 80, height = 20) {
+  if (!Array.isArray(observations) || observations.length < 2) return "";
+  const prices = observations
+    .map((o) => (Array.isArray(o) && typeof o[1] === "number" ? o[1] : null))
+    .filter((p) => p != null);
+  if (prices.length < 2) return "";
+
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const range = max - min || 1;  // guard against flat lines -> div by zero
+  const pad = 2;
+  const innerW = width - pad * 2;
+  const innerH = height - pad * 2;
+
+  // Build polyline points: x spaced evenly, y inverted (SVG origin
+  // is top-left) and normalized to [pad, height-pad].
+  const pts = prices.map((p, i) => {
+    const x = pad + (i * innerW) / (prices.length - 1);
+    const y = pad + innerH - ((p - min) / range) * innerH;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const polyline = pts.join(" ");
+
+  // Pick a color based on trend: green if last < first (price dropped),
+  // red if up, yellow if flat.
+  const first = prices[0];
+  const last = prices[prices.length - 1];
+  let stroke = "#94a3b8";  // neutral grey
+  if (last < first - 0.5) stroke = "#4ade80";       // down trend
+  else if (last > first + 0.5) stroke = "#f87171";  // up trend
+  else stroke = "#facc15";                           // flat-ish
+
+  // Last-point dot coordinates.
+  const lastX = pad + innerW;
+  const lastY = pad + innerH - ((last - min) / range) * innerH;
+
+  const title = `${prices.length} obs, min €${min.toFixed(0)}, max €${max.toFixed(0)}`;
+  return `
+    <svg class="sparkline" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"
+         xmlns="http://www.w3.org/2000/svg" aria-label="${title}">
+      <title>${title}</title>
+      <polyline points="${polyline}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
+      <circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="1.8" fill="${stroke}" />
+    </svg>
+  `.trim();
+}
+
 function initMap() {
   const map = L.map("map", {
     zoomControl: true,
@@ -396,10 +486,14 @@ function initMap() {
 }
 
 // Stable identity for a deal -- used to match recommendations back
-// to their rendered cards even after re-render. Matches the dedupe
-// key the scanner uses server-side.
+// to their rendered cards after re-render, for share-link deep
+// linking, and for looking up the route's price history. Matches
+// history.py's route_key() format EXACTLY: carrier|origin|dest|
+// window|outbound_date (date only, not full ISO timestamp) so
+// history.json can be consulted with a direct dict lookup.
 function dealKey(d) {
-  return `${d.carrier_code || "FR"}|${d.origin}|${d.destination_iata}|${d.weekend_window || "fri_sun"}|${d.outbound_departure}`;
+  const outDate = (d.outbound_departure || "").slice(0, 10);
+  return `${d.carrier_code || "FR"}|${d.origin}|${d.destination_iata}|${d.weekend_window || "fri_sun"}|${outDate}`;
 }
 
 function renderDealCard(deal, idx) {
@@ -476,13 +570,28 @@ function renderDealCard(deal, idx) {
   const stayHref = airbnbUrl(deal);
   const activitiesHref = activitiesUrl(deal);
 
+  // Price history sparkline. If this route has at least 2 prior
+  // observations in historyByKey, render a tiny 80x20 SVG. Otherwise
+  // sparklineHtml is an empty string and nothing shows.
+  const thisDealKey = dealKey(deal);
+  const obs = historyByKey[thisDealKey] || [];
+  const sparklineHtml = sparklineSvg(obs);
+
+  // Compare checkbox state (rendered checked if this deal is in
+  // the comparedKeys set).
+  const isCompared = comparedKeys.has(thisDealKey);
+
   li.innerHTML = `
     <div class="top">
-      <div>
+      <div class="top-left">
         <div class="city">${deal.destination_city || deal.destination_iata}</div>
         <div class="country">${deal.destination_country || ""} &middot; ${deal.destination_iata}</div>
+        ${sparklineHtml ? `<div class="sparkline-wrap" title="60-day price history">${sparklineHtml}</div>` : ""}
       </div>
       <div class="price-block">
+        <label class="compare-check" title="Add to compare (up to ${COMPARE_MAX_ITEMS})">
+          <input type="checkbox" data-action="compare-toggle" ${isCompared ? "checked" : ""}>
+        </label>
         <div class="price">${priceDisplay}</div>
         <div class="price-note">${priceNote}</div>
         ${trendHtml}
@@ -549,6 +658,32 @@ function renderDealCard(deal, idx) {
   li.querySelectorAll(".extras-row a").forEach((a) => {
     a.addEventListener("click", (e) => e.stopPropagation());
   });
+
+  // Compare checkbox: toggle this deal in/out of the compare tray.
+  const cmp = li.querySelector('input[data-action="compare-toggle"]');
+  if (cmp) {
+    cmp.addEventListener("click", (e) => {
+      e.stopPropagation();
+    });
+    cmp.addEventListener("change", (e) => {
+      e.stopPropagation();
+      const k = thisDealKey;
+      if (cmp.checked) {
+        if (comparedKeys.size >= COMPARE_MAX_ITEMS) {
+          cmp.checked = false;
+          showToast(`Max ${COMPARE_MAX_ITEMS} deals in compare`);
+          return;
+        }
+        comparedKeys.add(k);
+      } else {
+        comparedKeys.delete(k);
+      }
+      // Update the compare tray button visibility / count without
+      // a full re-render. Re-render would scroll the user back to
+      // the top of the list which is annoying when checking boxes.
+      updateCompareTrayButton();
+    });
+  }
   return li;
 }
 
@@ -564,7 +699,16 @@ async function main() {
 
   let payload;
   try {
-    payload = await loadDeals();
+    // Load deals and history in parallel. history.json is optional --
+    // if it doesn't exist yet (e.g. first scan after deploy) the
+    // sparklines simply don't render, nothing breaks. historyByKey
+    // is the module-level global read by renderDealCard.
+    const [dealsResult, historyResult] = await Promise.all([
+      loadDeals(),
+      loadHistory(),
+    ]);
+    payload = dealsResult;
+    historyByKey = historyResult;
   } catch (e) {
     console.error(e);
     metaEl.textContent = "Unable to load deals.json";
@@ -651,6 +795,133 @@ async function main() {
       region: activeRegion,
       search: currentSearchQuery(),
     };
+  }
+
+  // Collapse deals to just the cheapest weekend per destination.
+  // Used when displayMode === "best" so the user sees ~one card per
+  // city (the sweet spot) rather than one card per weekend per city.
+  // Returns a new array; does not mutate input.
+  function bestWeekendPerDest(deals) {
+    const byIata = new Map();
+    for (const d of deals) {
+      const iata = d.destination_iata;
+      if (!iata) continue;
+      const existing = byIata.get(iata);
+      if (!existing || dealPrice(d) < dealPrice(existing)) {
+        byIata.set(iata, d);
+      }
+    }
+    return Array.from(byIata.values());
+  }
+
+  // Show/hide + update count on the "Compare N" button in the
+  // sidebar header. Called after every checkbox toggle so the user
+  // sees the count change without a full re-render.
+  function updateCompareTrayButton() {
+    const btn = $("open-compare");
+    const count = $("compare-count");
+    if (!btn) return;
+    if (comparedKeys.size === 0) {
+      btn.style.display = "none";
+    } else {
+      btn.style.display = "block";
+      if (count) count.textContent = String(comparedKeys.size);
+    }
+  }
+
+  // Render one side-by-side compare card. Uses the same deal fields
+  // as the main sidebar card but laid out as a structured grid of
+  // rows for easy visual comparison across multiple picks.
+  function renderCompareCard(deal) {
+    const price = dealPrice(deal);
+    const co2Kg = estimateCO2Kg(deal);
+    const outDuration = flightDurationLabel(deal.outbound_departure, deal.outbound_arrival);
+    const inDuration = flightDurationLabel(deal.inbound_departure, deal.inbound_arrival);
+    const k = dealKey(deal);
+
+    const weatherCell = deal.weather_emoji
+      ? `${deal.weather_emoji} ${deal.weather_high_c != null ? Math.round(deal.weather_high_c) + "&deg;" : ""}${deal.weather_low_c != null ? " / " + Math.round(deal.weather_low_c) + "&deg;" : ""}`
+      : "&mdash;";
+
+    const hasPhoto = !!deal.photo_url;
+    const bgStyle = hasPhoto ? `style="background-image: url('${deal.photo_url}');"` : "";
+
+    const card = document.createElement("div");
+    card.className = "compare-card" + (hasPhoto ? " has-photo" : "");
+    if (hasPhoto) card.style.backgroundImage = `url('${deal.photo_url}')`;
+    card.innerHTML = `
+      <div class="cc-city">${deal.destination_city || deal.destination_iata}</div>
+      <div class="cc-row"><span class="cc-label">From</span><span class="cc-value">${ORIGIN_LABEL[deal.origin] || deal.origin}</span></div>
+      <div class="cc-price">${formatPrice(price)}</div>
+      <div class="cc-row"><span class="cc-label">Carrier</span><span class="cc-value">${deal.carrier_name || deal.carrier_code || "?"}</span></div>
+      <div class="cc-row"><span class="cc-label">Window</span><span class="cc-value">${deal.weekend_window_label || "Fri \u2192 Sun"}</span></div>
+      <div class="cc-row"><span class="cc-label">Dates</span><span class="cc-value">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span></div>
+      <div class="cc-row"><span class="cc-label">Outbound</span><span class="cc-value">${outDuration || "?"}</span></div>
+      <div class="cc-row"><span class="cc-label">Return</span><span class="cc-value">${inDuration || "?"}</span></div>
+      <div class="cc-row"><span class="cc-label">Weather</span><span class="cc-value">${weatherCell}</span></div>
+      <div class="cc-row"><span class="cc-label">CO&#8322;</span><span class="cc-value">${co2Kg != null ? "~" + co2Kg + " kg" : "&mdash;"}</span></div>
+      <div class="cc-row"><span class="cc-label">Lowest ever</span><span class="cc-value">${deal.lowest_ever_eur != null ? formatPrice(deal.lowest_ever_eur) : "&mdash;"}</span></div>
+      <button class="cc-remove" data-key="${k}">Remove</button>
+    `;
+    return card;
+  }
+
+  // Open the modal and populate it with every currently-compared deal.
+  function openCompareModal() {
+    const modal = $("compare-modal");
+    const grid = $("compare-grid");
+    if (!modal || !grid) return;
+
+    grid.innerHTML = "";
+
+    if (comparedKeys.size === 0) {
+      grid.innerHTML = '<div class="compare-empty">No deals selected. Check the boxes on deal cards to add them here.</div>';
+    } else {
+      // Look up the actual deal objects from payload.deals by key.
+      const compareList = [];
+      for (const d of payload.deals) {
+        if (comparedKeys.has(dealKey(d))) {
+          compareList.push(d);
+        }
+      }
+      compareList.forEach((deal) => {
+        const card = renderCompareCard(deal);
+        grid.appendChild(card);
+      });
+      // Wire up remove buttons.
+      grid.querySelectorAll(".cc-remove").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const k = btn.dataset.key;
+          comparedKeys.delete(k);
+          if (comparedKeys.size === 0) {
+            closeCompareModal();
+          } else {
+            openCompareModal();  // re-render
+          }
+          updateCompareTrayButton();
+          // Uncheck the corresponding card in the sidebar if it's visible.
+          const card = Array.from(listEl.querySelectorAll(".deal")).find(
+            (c) => c.dataset.dealKey === k
+          );
+          if (card) {
+            const cb = card.querySelector('input[data-action="compare-toggle"]');
+            if (cb) cb.checked = false;
+          }
+        });
+      });
+    }
+
+    modal.style.display = "flex";
+    modal.setAttribute("aria-hidden", "false");
+    document.body.classList.add("compare-open");
+  }
+
+  function closeCompareModal() {
+    const modal = $("compare-modal");
+    if (!modal) return;
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("compare-open");
   }
 
   // Apply filters common to both the map and the sidebar.
@@ -1063,12 +1334,23 @@ async function main() {
 
   function render() {
     const f = currentFilters();
-    const filtered = applyFilters(payload.deals, f);
+    let filtered = applyFilters(payload.deals, f);
+
+    // Best-weekend-per-destination collapse. Applied AFTER filtering
+    // so the "cheapest per city" respects the user's current price
+    // cap, region, origin, and search filters. Map markers always
+    // use the full filtered list (the map already groups by IATA
+    // internally in renderMapMarkers).
+    const sidebarDeals = displayMode === "best"
+      ? bestWeekendPerDest(filtered)
+      : filtered;
+
     updateMeta(filtered.length, payload.deals.length);
     renderWindowChips();
     renderRegionChips();
     renderMapMarkers(filtered);
-    renderSidebar(filtered, f.sortMode);
+    renderSidebar(sidebarDeals, f.sortMode);
+    updateCompareTrayButton();
     syncUrlState();
   }
 
@@ -1100,6 +1382,39 @@ async function main() {
     bhxCheckbox.addEventListener("change", render);
   }
   $("sort").addEventListener("change", render);
+
+  // View-mode radio buttons: "All weekends" vs "Best weekend per city".
+  document.querySelectorAll('input[name="view-mode"]').forEach((r) => {
+    r.addEventListener("change", () => {
+      if (r.checked) {
+        displayMode = r.value;
+        render();
+      }
+    });
+  });
+
+  // Compare tray + modal wiring.
+  const openCompareBtn = $("open-compare");
+  if (openCompareBtn) {
+    openCompareBtn.addEventListener("click", openCompareModal);
+  }
+  const closeCompareBtn = $("close-compare");
+  if (closeCompareBtn) {
+    closeCompareBtn.addEventListener("click", closeCompareModal);
+  }
+  // Click outside modal content to close.
+  const compareModal = $("compare-modal");
+  if (compareModal) {
+    compareModal.addEventListener("click", (e) => {
+      if (e.target === compareModal) closeCompareModal();
+    });
+  }
+  // Escape key closes the modal if it's open.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && compareModal && compareModal.style.display !== "none") {
+      closeCompareModal();
+    }
+  });
 
   // Search box: debounced so rapid typing doesn't cause 20 re-renders
   // per second on large payloads. 150ms feels responsive.
@@ -1260,6 +1575,9 @@ async function main() {
         fresh.generated_at !== payload.generated_at
       ) {
         payload = fresh;
+        // Refresh history too, so sparklines stay in sync with the
+        // new scan data. Fails silently if history.json is absent.
+        historyByKey = await loadHistory();
         render();
       }
     } catch (e) {

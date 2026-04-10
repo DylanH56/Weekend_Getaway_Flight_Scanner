@@ -129,7 +129,14 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Core files that always change on a run:
           git add dashboard/deals.json dashboard/last_scan_log.txt
+          # Optional scanner-generated caches. Wrapped with `|| true`
+          # so a missing file (e.g. first run before history is built)
+          # doesn't fail the step under set -e.
+          git add dashboard/history.json 2>/dev/null || true
+          git add dashboard/city_photos.json 2>/dev/null || true
+          git add dashboard/weather.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No deals.json changes to commit."
             exit 0
