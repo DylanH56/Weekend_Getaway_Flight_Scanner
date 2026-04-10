@@ -325,11 +325,24 @@ def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
 # everything.
 _reject_counts: dict[str, int] = {
     "missing_fields": 0,
-    "missing_coords": 0,
     "missing_dates": 0,
     "outside_evening_window": 0,
     "missing_iata": 0,
+    "unknown_destination": 0,
 }
+
+# IATA -> (lat, lon) lookup built from EUROPE_ROUTES. Ryanair's
+# farfnd/v4 response no longer carries a `coordinates` field on the
+# arrival airport (confirmed via raw-fare dump in last_scan_log.txt
+# after commit 78b2dca), so we have to source the coordinates
+# ourselves. Anything not in this map comes through with lat/lon
+# null; the dashboard handles that by showing the deal card without a
+# map marker, and the `unknown_destination` reject counter lets us
+# see at a glance how much coverage we're missing.
+_IATA_COORDS: dict[str, tuple[float, float]] = {}
+for _origin_routes in EUROPE_ROUTES.values():
+    for _iata, _city, _country, _lat, _lon in _origin_routes:
+        _IATA_COORDS.setdefault(_iata, (_lat, _lon))
 
 
 def _city_name(airport: dict) -> str:
@@ -350,17 +363,38 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
         _reject_counts["missing_fields"] += 1
         return None
 
+    dest_iata = arr.get("iataCode", "")
+    if not dest_iata:
+        _reject_counts["missing_iata"] += 1
+        return None
+
     flight_price = float(summary.get("value", 0))
     bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
     effective = flight_price + bus
 
-    coords = arr.get("coordinates") or {}
-    try:
-        lat = float(coords["latitude"])
-        lon = float(coords["longitude"])
-    except (KeyError, TypeError, ValueError):
-        _reject_counts["missing_coords"] += 1
-        return None
+    # Coordinates: Ryanair's farfnd/v4 used to carry these on
+    # arrivalAirport.coordinates but doesn't anymore. Try the response
+    # first (future-proofing) then fall back to our static lookup. If
+    # neither works we emit null -- the dashboard skips the map marker
+    # but still renders the card in the sidebar.
+    lat: float | None = None
+    lon: float | None = None
+    response_coords = arr.get("coordinates")
+    if isinstance(response_coords, dict):
+        try:
+            lat = float(response_coords["latitude"])
+            lon = float(response_coords["longitude"])
+        except (KeyError, TypeError, ValueError):
+            lat = lon = None
+    if lat is None:
+        fallback = _IATA_COORDS.get(dest_iata)
+        if fallback is not None:
+            lat, lon = fallback
+        else:
+            # Not in our static catalogue -- count it so we can see
+            # how many destinations are missing and decide whether
+            # to extend EUROPE_ROUTES. Still keep the deal though.
+            _reject_counts["unknown_destination"] += 1
 
     out_dep = outbound.get("departureDate", "")
     out_arr = outbound.get("arrivalDate", "")
@@ -383,10 +417,6 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
         _reject_counts["outside_evening_window"] += 1
         return None
 
-    dest_iata = arr.get("iataCode", "")
-    if not dest_iata:
-        _reject_counts["missing_iata"] += 1
-        return None
     out_date = out_dep[:10]
     in_date = in_dep[:10]
 
@@ -395,8 +425,8 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
         "destination_iata": dest_iata,
         "destination_city": _city_name(arr),
         "destination_country": arr.get("countryName", ""),
-        "destination_lat": lat,
-        "destination_lon": lon,
+        "destination_lat": lat,   # may be None if unknown destination
+        "destination_lon": lon,   # may be None if unknown destination
         "flight_price_eur": round(flight_price, 2),
         "bus_surcharge_eur": round(bus, 2),
         "effective_price_eur": round(effective, 2),

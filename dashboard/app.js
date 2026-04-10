@@ -215,6 +215,25 @@ async function main() {
       listEl.appendChild(li);
       cards.set(idx, li);
 
+      // Deals with unknown coordinates still render in the sidebar
+      // but don't get a map marker. Happens when Ryanair returns a
+      // destination we don't have in the IATA lookup table.
+      const hasCoords =
+        typeof deal.destination_lat === "number" &&
+        typeof deal.destination_lon === "number" &&
+        isFinite(deal.destination_lat) &&
+        isFinite(deal.destination_lon);
+
+      if (!hasCoords) {
+        // Clicking the card with no marker just highlights the card.
+        li.addEventListener("click", (e) => {
+          if (e.target.tagName === "A") return;
+          li.classList.add("highlighted");
+          setTimeout(() => li.classList.remove("highlighted"), 1500);
+        });
+        return;
+      }
+
       const colors = ORIGIN_COLOR[deal.origin];
       const marker = L.circleMarker(
         [deal.destination_lat, deal.destination_lon],

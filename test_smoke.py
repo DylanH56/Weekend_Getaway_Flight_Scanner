@@ -299,6 +299,66 @@ def test_scanner_normalise() -> None:
         assert_eq("bus surcharge present", deal["bus_surcharge_eur"], 30.0)
         assert_eq("effective = price + bus", deal["effective_price_eur"], 80.0)
 
+    print("\n=== scanner.normalise_fare: falls back to IATA lookup for coords ===")
+    # Build a fare object that matches current Ryanair shape (no coordinates)
+    fare_no_coords = {
+        "outbound": {
+            "departureDate": "2026-05-01T19:25:00",
+            "arrivalDate": "2026-05-01T21:00:00",
+            "flightNumber": "FR9999",
+            "arrivalAirport": {
+                # STN is in EUROPE_ROUTES, so lookup should succeed
+                "iataCode": "STN",
+                "name": "London Stansted",
+                "countryName": "United Kingdom",
+                "city": {"name": "London"},
+                # NO coordinates field -- mimics current Ryanair response
+            },
+        },
+        "inbound": {
+            "departureDate": "2026-05-03T18:00:00",
+            "arrivalDate": "2026-05-03T20:00:00",
+            "flightNumber": "FR9998",
+            "arrivalAirport": {"iataCode": "SNN"},
+        },
+        "summary": {"price": {"value": 29.99, "currencyCode": "EUR"}},
+    }
+    deal = scanner.normalise_fare(fare_no_coords, "SNN")
+    assert_eq("fare with no coords is kept", deal is not None, True)
+    if deal:
+        assert_eq("lat filled from IATA lookup",
+                  abs(deal["destination_lat"] - 51.886) < 0.01, True)
+        assert_eq("lon filled from IATA lookup",
+                  abs(deal["destination_lon"] - 0.2389) < 0.01, True)
+
+    print("\n=== scanner.normalise_fare: unknown IATA keeps deal but null coords ===")
+    fare_unknown = {
+        "outbound": {
+            "departureDate": "2026-05-01T19:25:00",
+            "arrivalDate": "2026-05-01T21:00:00",
+            "flightNumber": "FR9999",
+            "arrivalAirport": {
+                # ZZZ is not in EUROPE_ROUTES anywhere
+                "iataCode": "ZZZ",
+                "name": "Nowhere",
+                "countryName": "Atlantis",
+                "city": {"name": "Nowhere"},
+            },
+        },
+        "inbound": {
+            "departureDate": "2026-05-03T18:00:00",
+            "arrivalDate": "2026-05-03T20:00:00",
+            "flightNumber": "FR9998",
+            "arrivalAirport": {"iataCode": "SNN"},
+        },
+        "summary": {"price": {"value": 55.0, "currencyCode": "EUR"}},
+    }
+    deal = scanner.normalise_fare(fare_unknown, "SNN")
+    assert_eq("unknown-dest fare still kept", deal is not None, True)
+    if deal:
+        assert_eq("destination_lat is None for unknown IATA",
+                  deal["destination_lat"] is None, True)
+
 
 def test_send_test_notification() -> None:
     """Verify scanner.send_test_notification fires exactly one Discord POST."""
