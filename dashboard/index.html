@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weekend Getaway Flight Scanner</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin="">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="header-main">
+      <h1>Weekend Getaway Flight Scanner</h1>
+      <p class="subtitle">
+        Friday evening &rarr; Sunday evening &middot;
+        Shannon &amp; Dublin &rarr; Europe &middot;
+        <span class="cap">under &euro;100</span>
+      </p>
+    </div>
+    <p class="meta" id="meta">Loading deals&hellip;</p>
+  </header>
+
+  <main>
+    <div id="map"></div>
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <h2>Deals</h2>
+        <div class="filters">
+          <label>
+            <input type="checkbox" id="filter-snn" checked>
+            <span class="dot snn"></span> Shannon
+          </label>
+          <label>
+            <input type="checkbox" id="filter-dub" checked>
+            <span class="dot dub"></span> Dublin (+&euro;30 bus)
+          </label>
+        </div>
+        <div class="sort-row">
+          <label>Sort by
+            <select id="sort">
+              <option value="price">Cheapest first</option>
+              <option value="date">Soonest first</option>
+              <option value="country">Country</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <ol id="deal-list"></ol>
+    </aside>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>
