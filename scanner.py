@@ -1460,7 +1460,7 @@ def _clear_scan_watchdog() -> None:
 # shows behaviour that doesn't match this ID's claimed features,
 # the runner is executing stale code. Look for this exact string
 # in the log to know which build is live.
-SCANNER_BUILD_ID = "build-2026-04-10.5 (4-layer anti-hang, AL=3w, watchdog=600s)"
+SCANNER_BUILD_ID = "build-2026-04-10.6 (enrichment watchdog, AL=3w, watchdog=600s)"
 
 
 def _run() -> int:
@@ -1721,14 +1721,39 @@ def _run_impl() -> int:
     # forecast. Both are best-effort: any network failure logs a warning
     # and falls through with the deal unannotated. Photos are cached
     # permanently; weather has a 12h TTL.
+    #
+    # Historically these called _http_get directly, which meant:
+    #   (a) a curl_cffi failure on a Wikipedia/open-meteo call would
+    #       flip _CURL_CFFI_AVAILABLE=False and fall through to plain
+    #       requests, which could then hang indefinitely on the next
+    #       call (same failure mode as Aer Lingus);
+    #   (b) no wall-clock cap on any single enrichment call.
+    # Root cause of the line-460 scan hang: an enrichment call, not an
+    # AL call, hung in plain-requests after curl_cffi fell back. The
+    # DUB->LGW warnings in the log were a red herring -- they were just
+    # the last loud event before the silent enrichment phase stalled.
+    #
+    # Fix: route enrichment calls through the same watchdog wrapper AL
+    # uses, with allow_plain_fallback=False. Each enrichment call now
+    # has a hard 8s wall-clock cap and cannot trigger the plain-requests
+    # fallback. Failures are caught by the enrichment modules' own
+    # try/except blocks and fall through with the deal unannotated.
+    def _enrichment_http_get(url, **kwargs):
+        return _http_get_with_watchdog(
+            url,
+            watchdog_seconds=8.0,
+            allow_plain_fallback=False,
+            **kwargs,
+        )
+
     try:
         from enrichments import enrich_photos, enrich_weather
-        enrich_photos(deals, PHOTO_CACHE_PATH, _http_get)
+        enrich_photos(deals, PHOTO_CACHE_PATH, _enrichment_http_get)
     except Exception as e:
         print(f"  [photos] error: {e}", file=sys.stderr)
     try:
         from enrichments import enrich_weather
-        enrich_weather(deals, WEATHER_CACHE_PATH, _http_get)
+        enrich_weather(deals, WEATHER_CACHE_PATH, _enrichment_http_get)
     except Exception as e:
         print(f"  [weather] error: {e}", file=sys.stderr)
 
