@@ -366,7 +366,9 @@ def test_fetch_fares_uses_http_get_seam() -> None:
     assert_eq("time-filter params dropped (were causing 400s)",
               "outboundDepartureTimeFrom" not in params and
               "inboundDepartureTimeFrom" not in params, True)
-    assert_eq("limit reduced to 50", params.get("limit"), "50")
+    assert_eq("limit/offset dropped (farfnd rejects InvalidLimit)",
+              "limit" not in params and "offset" not in params, True)
+    assert_eq("params include market", params.get("market"), "en-ie")
 
     print("\n=== scanner.fetch_fares: 400 response raises requests.HTTPError ===")
 

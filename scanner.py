@@ -281,8 +281,15 @@ def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
     so the main loop's existing HTTPError handler sees a consistent type no
     matter whether curl_cffi or plain requests made the call.
     """
+    # Minimal param set matching what ryanair.com's own fare-finder page
+    # sends. The previous iteration included `limit` and `offset` which
+    # farfnd/v4 rejects with `{"code":"InvalidLimit","message":"Invalid limit"}`.
+    # Any extra param that the endpoint doesn't recognise is a hard 400,
+    # so stick to the documented set only.
     params = {
         "departureAirportIataCode": origin,
+        "market": "en-ie",
+        "adultPaxCount": "1",
         "outboundDepartureDateFrom": friday.isoformat(),
         "outboundDepartureDateTo": friday.isoformat(),
         "inboundDepartureDateFrom": sunday.isoformat(),
@@ -291,10 +298,6 @@ def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
         # fit after adding the bus surcharge come through.
         "priceValueTo": str(int(PRICE_CAP_EUR + BUS_RETURN_COST_EUR)),
         "currency": "EUR",
-        "market": "en-ie",
-        "adultPaxCount": "1",
-        "limit": "50",
-        "offset": "0",
     }
     resp = _http_get(
         RYANAIR_URL, params=params, headers=RYANAIR_HEADERS, timeout=30
