@@ -659,19 +659,16 @@ def _ryanair_normalise_fare(fare: dict, origin: str) -> dict | None:
 
 
 # ---------- Aer Lingus fetch ----------
-# Aer Lingus's public fare finder exposes a JSON endpoint that the
-# www.aerlingus.com booking widget calls. It's not documented as a
-# public API so it can change without notice; treat any schema changes
-# the same way we handled Ryanair dropping `coordinates` -- log the
-# raw response via scan_log dump and iterate.
-AER_LINGUS_URL = "https://www.aerlingus.com/rest-api/rest/v1/offers/search"
-# Fallback endpoint tried if the primary one 404s. Multiple candidates
-# exist in the wild; we try each in turn the first time we encounter a
-# 404 and remember which one worked for the rest of the run.
-AER_LINGUS_FALLBACK_URLS = [
-    "https://www.aerlingus.com/api/fare-finder/low-fare-finder/v1/get-low-fares",
-    "https://www.aerlingus.com/publicapi/flight-search/v1/flights",
-]
+# Aer Lingus uses a GET endpoint at /api/v2/flights/fixed that returns
+# a round-trip availability search. Endpoint confirmed via a real
+# browser capture (see session 01QJRsJg6woitt3nmdwvKQdr). Response
+# shape is data.journey.{outbound,inbound}.flights[] where each flight
+# is a one-way segment with its own priceInfo.fares[] list; we have
+# to pair the cheapest outbound `low` fare with the cheapest inbound
+# `low` fare ourselves and sum the prices for the round-trip total.
+AER_LINGUS_URL = "https://www.aerlingus.com/api/v2/flights/fixed"
+# Fallback URLs no longer needed; left empty to keep the code shape.
+AER_LINGUS_FALLBACK_URLS: list[str] = []
 
 _AER_LINGUS_WORKING_URL: str | None = None
 # One-shot circuit breaker: once every candidate URL has failed on
@@ -686,60 +683,118 @@ _AER_LINGUS_DISABLED: bool = False
 AER_LINGUS_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-IE,en-GB;q=0.9,en;q=0.8",
+    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
     "Accept-Encoding": "gzip, deflate, br",
-    "Origin": "https://www.aerlingus.com",
-    "Referer": "https://www.aerlingus.com/",
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-origin",
-    "Sec-Ch-Ua": '"Google Chrome";v="120", "Chromium";v="120", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
+    # Aer Lingus's own frontend sends the literal string "null" for
+    # the correlation id -- mirror that exactly, some backends reject
+    # missing headers.
+    "X-Correlation-Id": "null",
+    "Priority": "u=1, i",
 }
 
-# Aer Lingus's network is much narrower than Ryanair's so scanning
-# every possible SNN/DUB destination for every weekend is wasteful.
-# These are the destinations we care about *in addition to* anything
-# that also shows up in Ryanair results (we dedup afterwards). SNN is
-# basically just Heathrow; DUB has broader European reach.
+# Aer Lingus's network is broader than Ryanair's but per-call cost is
+# much higher (one HTTP call per destination instead of farfnd's
+# cheapest-across-all-dests). To keep the overall scan under ~5
+# minutes we trim aggressively:
+#   * SNN gets only LHR (the one route Ryanair doesn't cover).
+#   * DUB gets the 8 biggest hubs -- enough to catch sales to London,
+#     major European capitals, and Rome.
+# Additional destinations can be added later as individual one-liners.
 AER_LINGUS_DESTINATIONS: dict[str, list[str]] = {
     "SNN": ["LHR"],  # Shannon only flies to Heathrow on Aer Lingus
     "DUB": [
-        "LHR", "LGW", "MAN", "EDI", "GLA", "BHX",
-        "AMS", "BRU", "CDG", "FRA", "MUC", "ZRH", "GVA",
-        "BCN", "MAD", "AGP", "ALC", "LIS", "OPO", "FAO",
-        "FCO", "MXP", "VCE", "NAP", "BLQ",
-        "PRG", "VIE", "BUD", "CPH", "ARN", "HEL",
+        "LHR",   # London Heathrow
+        "LGW",   # London Gatwick
+        "MAN",   # Manchester
+        "EDI",   # Edinburgh
+        "AMS",   # Amsterdam
+        "BCN",   # Barcelona
+        "MAD",   # Madrid
+        "FCO",   # Rome Fiumicino
     ],
 }
+
+
+def _aer_lingus_referer(origin: str, dest: str, out_date: dt.date, in_date: dt.date) -> str:
+    """Build the Referer header Aer Lingus expects -- matching what
+    www.aerlingus.com/app/make/flight-search-result sends. Uses ISO
+    dates in the referer (YYYY-MM-DD) even though the API query
+    params use DD/MM/YYYY -- yes, really."""
+    return (
+        "https://www.aerlingus.com/app/make/flight-search-result"
+        f"?fareType=RETURN&fareCategory=ECONOMY"
+        f"&sourceAirportCode_0={origin}&destinationAirportCode_0={dest}"
+        f"&departureDate_0={out_date.isoformat()}"
+        f"&sourceAirportCode_1={dest}&destinationAirportCode_1={origin}"
+        f"&departureDate_1={in_date.isoformat()}"
+        f"&numAdults=1&numYoungAdults=0&numChildren=0&numInfants=0"
+        f"&promoCode=&groupBooking=false"
+    )
+
+
+def _aer_lingus_cheapest_low_fare(flight: dict) -> dict | None:
+    """Extract the cheapest `type: "low"` fare from a flight's
+    priceInfo.fares[]. Returns None if there's no low fare available
+    (e.g. only plus/flex/aerspace are on offer)."""
+    fares = (flight.get("priceInfo") or {}).get("fares") or []
+    low = [
+        f for f in fares
+        if f.get("type") == "low"
+        and isinstance(f.get("price"), (int, float))
+    ]
+    if not low:
+        return None
+    return min(low, key=lambda f: f["price"])
+
+
+def _aer_lingus_is_ei_operated(flight: dict) -> bool:
+    """True iff the flight is actually flown by Aer Lingus (EI),
+    not a BA / other codeshare sold under an EI flight number. We
+    prefer real AL flights so the carrier badge stays meaningful."""
+    trips = flight.get("trips") or []
+    if not trips:
+        return False
+    info = (trips[0] or {}).get("info") or {}
+    return info.get("operatingAirlineCode") == "EI"
 
 
 def _aer_lingus_fetch_fares(
     origin: str, friday: dt.date, sunday: dt.date
 ) -> dict:
-    """Query Aer Lingus's internal fare-finder endpoint for one weekend.
+    """Query Aer Lingus's /api/v2/flights/fixed endpoint per route.
 
-    Aer Lingus doesn't publish farfnd-style "cheapest per route from
-    origin" so we query route-by-route: one HTTP call per destination
-    in AER_LINGUS_DESTINATIONS[origin]. That's still cheap (~1-30 calls
-    per weekend) compared to the Ryanair scan, and it gives us a real
-    flight-by-flight list rather than just the cheapest per day.
+    AL doesn't expose a Ryanair-style "cheapest per route from origin"
+    call, so we loop over AER_LINGUS_DESTINATIONS[origin] and make one
+    GET per (origin, dest, weekend). Response shape is:
 
-    Returns a dict with a `fares` key containing a list of items in
-    a shape _aer_lingus_normalise_fare understands. If every candidate
-    URL 404s or the endpoint has changed, returns an empty list
-    silently -- Ryanair results will still land in the same run.
+        data.journey.outbound.flights[]    - outbound candidates
+        data.journey.inbound.flights[]     - inbound candidates
+
+    Each flight entry is ONE segment with a priceInfo.fares[] list of
+    fare types (low / plus / flex / aerspace). We pick the cheapest
+    `low` on each side, filter out BA codeshares, and synthesise a
+    round-trip fare object by summing the two prices. That synthetic
+    object is what _aer_lingus_normalise_fare consumes.
+
+    Either direction can have `flights: null` + a SOLD_OUT message,
+    in which case we skip that destination silently.
+
+    On total failure (first destination's first call doesn't even
+    return 200), we flip _AER_LINGUS_DISABLED so the rest of the
+    scan skips AL entirely. Typical offender: Kasada bot protection
+    via the reese84 cookie.
     """
     global _AER_LINGUS_WORKING_URL, _AER_LINGUS_DISABLED
 
-    # Circuit breaker: if a previous call already confirmed that
-    # every candidate URL is broken, don't waste time hitting them
-    # again for every weekend. Saves ~5 minutes of wall time when
-    # the AL endpoint has moved or is unreachable.
     if _AER_LINGUS_DISABLED:
         return {"fares": []}
 
@@ -748,190 +803,199 @@ def _aer_lingus_fetch_fares(
         return {"fares": []}
 
     all_fares: list[dict] = []
+    # DD/MM/YYYY is what the API query params want (verified via live
+    # browser capture). The referer and the scanner's internal dates
+    # both stay as ISO -- the format swap is only for the query.
+    dep_date_str = friday.strftime("%d/%m/%Y")
+    ret_date_str = sunday.strftime("%d/%m/%Y")
 
-    urls_to_try = (
-        [_AER_LINGUS_WORKING_URL]
-        if _AER_LINGUS_WORKING_URL
-        else [AER_LINGUS_URL, *AER_LINGUS_FALLBACK_URLS]
-    )
+    any_call_succeeded = False
 
     for dest in destinations:
         params = {
-            "origin": origin,
-            "destination": dest,
-            "outboundDate": friday.isoformat(),
-            "inboundDate": sunday.isoformat(),
-            "adults": "1",
-            "children": "0",
-            "infants": "0",
-            "tripType": "RETURN",
-            "currency": "EUR",
+            "origin": f"{origin},{dest}",        # leg1_origin,leg2_origin
+            "destination": f"{dest},{origin}",   # leg1_dest,leg2_dest
+            "departureDate": dep_date_str,
+            "returnDate": ret_date_str,
+            "numYouths": "0",
+            "numAdults": "1",
+            "numChildren": "0",
+            "numInfants": "0",
+            "fare": "low",
+        }
+        headers = {
+            **AER_LINGUS_HEADERS,
+            "Referer": _aer_lingus_referer(origin, dest, friday, sunday),
         }
 
-        succeeded = False
-        for url in urls_to_try:
-            if not url:
-                continue
-            try:
-                resp = _http_get(
-                    url, params=params, headers=AER_LINGUS_HEADERS, timeout=20
-                )
-                status = getattr(resp, "status_code", None)
-                if status is None:
-                    continue
-                if status == 404:
-                    continue  # try next candidate URL
-                if status >= 400:
-                    # Other error -- log the body once per destination and skip
-                    try:
-                        body = (resp.text or "")[:200].replace("\n", " ")
-                    except Exception:
-                        body = ""
-                    print(
-                        f"  [warn] aer_lingus {origin}->{dest} {friday}: "
-                        f"HTTP {status} body={body!r}",
-                        file=sys.stderr,
-                    )
-                    break
-                data = resp.json()
-                # Remember which URL worked so subsequent calls skip the 404 dance.
-                if _AER_LINGUS_WORKING_URL is None:
-                    _AER_LINGUS_WORKING_URL = url
-                    print(f"  [info] aer_lingus working endpoint: {url}", file=sys.stderr)
-                # Each fare in the response gets an extra key so the normaliser
-                # knows the origin and destination -- Aer Lingus's response
-                # doesn't always echo those back in a consistent shape.
-                fares = data.get("fares") or data.get("offers") or data.get("flights") or []
-                for f in fares:
-                    if isinstance(f, dict):
-                        f.setdefault("_origin", origin)
-                        f.setdefault("_destination", dest)
-                        all_fares.append(f)
-                succeeded = True
-                break
-            except Exception as e:
+        try:
+            resp = _http_get(
+                AER_LINGUS_URL, params=params, headers=headers, timeout=20
+            )
+            status = getattr(resp, "status_code", None)
+            if status is None or status >= 400:
+                try:
+                    body_snippet = (resp.text or "")[:200].replace("\n", " ")
+                except Exception:
+                    body_snippet = ""
                 print(
                     f"  [warn] aer_lingus {origin}->{dest} {friday}: "
-                    f"{type(e).__name__}: {e}",
+                    f"HTTP {status} body={body_snippet!r}",
                     file=sys.stderr,
                 )
                 continue
-
-        if not succeeded and _AER_LINGUS_WORKING_URL is None:
-            # Every candidate URL failed. Flip the global circuit
-            # breaker so the rest of the scan skips Aer Lingus
-            # entirely -- no more wasted network time. The user will
-            # see a single "disabled for this run" line in the log.
-            _AER_LINGUS_DISABLED = True
+            data = resp.json()
+        except Exception as e:
             print(
-                f"  [warn] aer_lingus: all candidate endpoints failed on "
-                f"first weekend -- disabling Aer Lingus for the rest of "
-                f"this run.",
+                f"  [warn] aer_lingus {origin}->{dest} {friday}: "
+                f"{type(e).__name__}: {e}",
                 file=sys.stderr,
             )
-            return {"fares": all_fares}
-        time.sleep(0.15)  # be polite
+            continue
+
+        any_call_succeeded = True
+        if _AER_LINGUS_WORKING_URL is None:
+            _AER_LINGUS_WORKING_URL = AER_LINGUS_URL
+            print(
+                f"  [info] aer_lingus working endpoint confirmed: {AER_LINGUS_URL}",
+                file=sys.stderr,
+            )
+
+        journey = (data.get("data") or {}).get("journey") or {}
+        out_flights = ((journey.get("outbound") or {}).get("flights")) or []
+        in_flights = ((journey.get("inbound") or {}).get("flights")) or []
+
+        # Either direction unavailable (SOLD_OUT or empty) -- no
+        # round-trip possible for this weekend.
+        if not out_flights or not in_flights:
+            continue
+
+        out_candidates = [
+            (f, _aer_lingus_cheapest_low_fare(f))
+            for f in out_flights
+            if _aer_lingus_is_ei_operated(f)
+        ]
+        out_candidates = [(f, p) for f, p in out_candidates if p is not None]
+
+        in_candidates = [
+            (f, _aer_lingus_cheapest_low_fare(f))
+            for f in in_flights
+            if _aer_lingus_is_ei_operated(f)
+        ]
+        in_candidates = [(f, p) for f, p in in_candidates if p is not None]
+
+        if not out_candidates or not in_candidates:
+            continue
+
+        out_candidates.sort(key=lambda x: x[1]["price"])
+        in_candidates.sort(key=lambda x: x[1]["price"])
+
+        out_flight, out_fare = out_candidates[0]
+        in_flight, in_fare = in_candidates[0]
+
+        all_fares.append({
+            "_origin": origin,
+            "_destination": dest,
+            "_total_price": float(out_fare["price"]) + float(in_fare["price"]),
+            "_outbound_flight": out_flight,
+            "_inbound_flight": in_flight,
+        })
+
+        time.sleep(0.2)  # be polite, aerlingus.com is rate-limited
+
+    # Circuit breaker: if NOT A SINGLE call even made it to a 200
+    # response on this whole weekend, assume the endpoint is broken
+    # or Kasada is gating us, and disable AL for the rest of the run.
+    if not any_call_succeeded and _AER_LINGUS_WORKING_URL is None:
+        _AER_LINGUS_DISABLED = True
+        print(
+            f"  [warn] aer_lingus: every call on first weekend failed -- "
+            f"disabling AL for the rest of this run.",
+            file=sys.stderr,
+        )
 
     return {"fares": all_fares}
 
 
 def _aer_lingus_normalise_fare(fare: dict, origin: str) -> dict | None:
-    """Turn an Aer Lingus fare into our flat deal schema.
+    """Turn a synthetic Aer Lingus round-trip fare into our flat deal schema.
 
-    Handles several plausible shapes because Aer Lingus's internal
-    endpoints have churned over the years. Looks for:
-      - price: fare['price'] or fare['amount'] or fare['totalFare']['value']
-      - outbound/inbound: fare['outbound']/['inbound'] dicts with
-        departure/arrival timestamps and flight numbers
-      - destination: fare['_destination'] (set by _aer_lingus_fetch_fares)
+    The input `fare` is NOT a raw Aer Lingus API item -- it's a
+    dict built by _aer_lingus_fetch_fares that pairs the cheapest
+    outbound and inbound single-segment flights for a given weekend:
+
+        {
+          "_origin":            "DUB",
+          "_destination":       "LHR",
+          "_total_price":       292.80,   # out_low + in_low, EUR
+          "_outbound_flight":   { ... raw AL flight dict with trips[] ... },
+          "_inbound_flight":    { ... raw AL flight dict with trips[] ... },
+        }
+
+    We pull the trip info (departure / arrival timestamps, flight
+    numbers, airport codes) out of trips[0].departure / arrival /
+    info on each side, then hand off to _apply_common_filters for
+    the usual evening-window + IATA-coord checks.
     """
     try:
-        # Price extraction -- try several fields
-        price = None
-        for key in ("price", "amount", "totalAmount"):
-            v = fare.get(key)
-            if isinstance(v, (int, float)):
-                price = float(v)
-                break
-            if isinstance(v, dict) and "value" in v:
-                price = float(v["value"])
-                break
-        if price is None:
-            total = fare.get("totalFare") or fare.get("total")
-            if isinstance(total, dict):
-                price = float(total.get("value") or total.get("amount") or 0)
-        if not price:
+        origin_from_fare = fare.get("_origin") or origin
+        dest_iata = fare.get("_destination", "")
+        total_price = fare.get("_total_price")
+        outbound_flight = fare.get("_outbound_flight") or {}
+        inbound_flight = fare.get("_inbound_flight") or {}
+
+        if not dest_iata or not isinstance(total_price, (int, float)):
             _reject_counts["missing_fields"] += 1
             return None
 
-        flight_price = float(price)
-        bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
+        flight_price = float(total_price)
+        bus = 0.0 if origin_from_fare == "SNN" else BUS_RETURN_COST_EUR
         effective = flight_price + bus
 
-        # Outbound / inbound extraction
-        outbound = fare.get("outbound") or (fare.get("legs") or [{}])[0] or {}
-        inbound = fare.get("inbound")
-        if inbound is None:
-            legs = fare.get("legs") or []
-            inbound = legs[1] if len(legs) > 1 else {}
+        # Aer Lingus puts the actual flight details under trips[0].
+        out_trip = ((outbound_flight.get("trips") or [{}])[0]) or {}
+        in_trip = ((inbound_flight.get("trips") or [{}])[0]) or {}
 
-        out_dep = (
-            outbound.get("departureDateTime")
-            or outbound.get("departureDate")
-            or outbound.get("departure")
-            or ""
-        )
-        out_arr = (
-            outbound.get("arrivalDateTime")
-            or outbound.get("arrivalDate")
-            or outbound.get("arrival")
-            or ""
-        )
-        in_dep = (
-            inbound.get("departureDateTime")
-            or inbound.get("departureDate")
-            or inbound.get("departure")
-            or ""
-        )
-        in_arr = (
-            inbound.get("arrivalDateTime")
-            or inbound.get("arrivalDate")
-            or inbound.get("arrival")
-            or ""
-        )
+        # Dates come back as "2026-04-12T08:50:00.000" -- strip the
+        # milliseconds so the HH:MM slice in _apply_common_filters
+        # still lines up at [11:16].
+        def _trim_iso(s: str) -> str:
+            return s[:19] if s and len(s) >= 19 else s
 
-        dest_iata = (
-            fare.get("_destination")
-            or outbound.get("destination")
-            or outbound.get("arrivalAirportCode")
-            or ""
-        )
+        out_dep = _trim_iso((out_trip.get("departure") or {}).get("date") or "")
+        out_arr = _trim_iso((out_trip.get("arrival") or {}).get("date") or "")
+        in_dep = _trim_iso((in_trip.get("departure") or {}).get("date") or "")
+        in_arr = _trim_iso((in_trip.get("arrival") or {}).get("date") or "")
 
-        common = _apply_common_filters(origin, dest_iata, flight_price, out_dep, in_dep)
+        common = _apply_common_filters(
+            origin_from_fare, dest_iata, flight_price, out_dep, in_dep
+        )
         if common is None:
             return None
         lat, lon, _out_hhmm, _in_hhmm = common
 
-        out_flight = (
-            outbound.get("flightNumber")
-            or outbound.get("number")
-            or "EI?"
+        out_info = out_trip.get("info") or {}
+        in_info = in_trip.get("info") or {}
+        # out_info.code is like "EI 153"; strip the space for a
+        # compact flight number. Fall back to number if code missing.
+        out_flight_num = (
+            (out_info.get("code") or "").replace(" ", "")
+            or f"EI{out_info.get('number', '')}"
         )
-        in_flight = (
-            inbound.get("flightNumber")
-            or inbound.get("number")
-            or "EI?"
+        in_flight_num = (
+            (in_info.get("code") or "").replace(" ", "")
+            or f"EI{in_info.get('number', '')}"
         )
 
         out_date = out_dep[:10]
         in_date = in_dep[:10]
 
         return {
-            "origin": origin,
+            "origin": origin_from_fare,
             "carrier_code": "EI",
             "carrier_name": "Aer Lingus",
             "destination_iata": dest_iata,
-            "destination_city": dest_iata,  # AL responses vary; fall back to IATA
+            "destination_city": dest_iata,  # AL doesn't give city name; IATA as fallback
             "destination_country": "",
             "destination_lat": lat,
             "destination_lon": lon,
@@ -941,12 +1005,16 @@ def _aer_lingus_normalise_fare(fare: dict, origin: str) -> dict | None:
             "currency": "EUR",
             "outbound_departure": out_dep,
             "outbound_arrival": out_arr,
-            "outbound_flight_number": out_flight,
+            "outbound_flight_number": out_flight_num,
             "inbound_departure": in_dep,
             "inbound_arrival": in_arr,
-            "inbound_flight_number": in_flight,
-            "google_flights_url": google_flights_url(origin, dest_iata, out_date, in_date),
-            "skyscanner_url": skyscanner_url(origin, dest_iata, out_date, in_date),
+            "inbound_flight_number": in_flight_num,
+            "google_flights_url": google_flights_url(
+                origin_from_fare, dest_iata, out_date, in_date
+            ),
+            "skyscanner_url": skyscanner_url(
+                origin_from_fare, dest_iata, out_date, in_date
+            ),
         }
     except Exception as e:
         _reject_counts["missing_fields"] += 1
@@ -965,12 +1033,23 @@ SOURCES = [
         "label": "Ryanair (FR)",
         "fetch": _ryanair_fetch_fares,
         "normalise": _ryanair_normalise_fare,
+        # None = all configured windows and weekends.
+        "windows": None,
+        "max_weekends": None,
     },
     {
         "name": "aer_lingus",
         "label": "Aer Lingus (EI)",
         "fetch": _aer_lingus_fetch_fares,
         "normalise": _aer_lingus_normalise_fare,
+        # AL is expensive per-call (one HTTP call per destination)
+        # and the fares are typically well above PRICE_CAP anyway,
+        # so we trim the scan scope aggressively: classic Fri->Sun
+        # only, and only the next 13 weekends (~3 months). Total
+        # call count becomes ~9 dests x 13 weekends = ~117, which
+        # adds 2-3 minutes to the scan.
+        "windows": ["fri_sun"],
+        "max_weekends": 13,
     },
 ]
 
@@ -1144,15 +1223,14 @@ def _run() -> int:
     per_source_summary: dict[str, dict] = {}
     sample_dumped: dict[str, bool] = {s["name"]: False for s in SOURCES}
 
-    # Fan out each base Friday across every enabled weekend window.
-    # The classic Fri->Sun still runs by default; Thu->Sun / Fri->Mon /
-    # Fri->Tue piggyback on the same scan and each contributes their
-    # own set of deals tagged with `weekend_window`.
-    window_specs = list(next_weekend_windows(len(weekends)))
+    # Base window-weekend plan used by any source that doesn't
+    # override it. Trimmed per-source below if SOURCES entry
+    # declares `windows` or `max_weekends`.
+    base_window_specs = list(next_weekend_windows(len(weekends)))
     print(
-        f"Weekend windows enabled: "
+        f"Base weekend windows: "
         + ", ".join(w[1] for w in WEEKEND_WINDOWS)
-        + f"  ({len(window_specs)} total window-weekends)"
+        + f"  ({len(base_window_specs)} total window-weekends)"
     )
 
     for source in SOURCES:
@@ -1160,6 +1238,28 @@ def _run() -> int:
         source_label = source["label"]
         fetch = source["fetch"]
         normalise = source["normalise"]
+
+        # Per-source trimming: restrict to specific windows and/or
+        # a shorter scanning horizon to keep expensive sources (like
+        # Aer Lingus with its one-call-per-destination shape) from
+        # blowing up scan runtime.
+        source_windows_filter = source.get("windows")
+        source_max_weekends = source.get("max_weekends") or len(weekends)
+        source_window_spec_list = [
+            WEEKEND_WINDOWS[i]
+            for i, w in enumerate(WEEKEND_WINDOWS)
+            if source_windows_filter is None or w[0] in source_windows_filter
+        ]
+        if not source_window_spec_list:
+            source_window_spec_list = WEEKEND_WINDOWS  # fail-safe
+        window_specs = list(
+            next_weekend_windows(source_max_weekends, windows=source_window_spec_list)
+        )
+        if window_specs != base_window_specs:
+            print(
+                f"  ({source_name} scans {len(window_specs)} window-weekends: "
+                f"{', '.join(w[1] for w in source_window_spec_list)} x {source_max_weekends} weekends)"
+            )
 
         source_calls = 0
         source_failed = 0

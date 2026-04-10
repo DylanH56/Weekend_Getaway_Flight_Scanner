@@ -366,21 +366,54 @@ def test_scanner_normalise() -> None:
 
 
 def test_aer_lingus_normalise() -> None:
-    """Verify _aer_lingus_normalise_fare parses a plausible AL response."""
+    """Verify _aer_lingus_normalise_fare parses the synthetic round-trip
+    fare shape that _aer_lingus_fetch_fares builds from the real
+    Aer Lingus /api/v2/flights/fixed response."""
     print("\n=== scanner._aer_lingus_normalise_fare: schema parsing ===")
+    # This matches the exact shape _aer_lingus_fetch_fares produces:
+    # a synthetic dict pairing the cheapest outbound and inbound
+    # raw flight objects with their summed price.
     fare = {
         "_origin": "DUB",
         "_destination": "LHR",
-        "price": 59.99,
-        "outbound": {
-            "departureDateTime": "2026-05-01T19:25:00",
-            "arrivalDateTime": "2026-05-01T20:55:00",
-            "flightNumber": "EI154",
+        "_total_price": 146.40 + 99.99,
+        "_outbound_flight": {
+            "totalDuration": "1h25m",
+            "priceInfo": {
+                "fares": [{"type": "low", "price": 99.99}],
+            },
+            "trips": [{
+                "duration": "1h25m",
+                "departure": {"date": "2026-05-01T19:25:00.000", "airportCode": "DUB"},
+                "arrival":   {"date": "2026-05-01T20:55:00.000", "airportCode": "LHR"},
+                "info": {
+                    "number": "154",
+                    "code": "EI 154",
+                    "carrierAirlineCode": "EI",
+                    "operatingAirlineCode": "EI",
+                    "carrierAirlineName": "Aer Lingus",
+                    "operatingAirlineName": "Aer Lingus",
+                },
+            }],
         },
-        "inbound": {
-            "departureDateTime": "2026-05-03T20:10:00",
-            "arrivalDateTime": "2026-05-03T21:30:00",
-            "flightNumber": "EI155",
+        "_inbound_flight": {
+            "totalDuration": "1h25m",
+            "priceInfo": {
+                "fares": [{"type": "low", "price": 146.40}],
+            },
+            "trips": [{
+                "duration": "1h25m",
+                "departure": {"date": "2026-05-03T20:10:00.000", "airportCode": "LHR"},
+                "arrival":   {"date": "2026-05-03T21:30:00.000", "airportCode": "DUB"},
+                "info": {
+                    "number": "153",
+                    "code": "EI 153",
+                    "carrierAirlineCode": "EI",
+                    "operatingAirlineCode": "EI",
+                    "carrierAirlineName": "Aer Lingus",
+                    "operatingAirlineName": "Aer Lingus",
+                },
+            }],
         },
     }
     deal = scanner._aer_lingus_normalise_fare(fare, "DUB")
@@ -389,15 +422,68 @@ def test_aer_lingus_normalise() -> None:
         assert_eq("carrier_code is EI", deal["carrier_code"], "EI")
         assert_eq("carrier_name is Aer Lingus", deal["carrier_name"], "Aer Lingus")
         assert_eq("AL dest LHR", deal["destination_iata"], "LHR")
-        assert_eq("AL flight price", deal["flight_price_eur"], 59.99)
+        assert_eq(
+            "AL flight price (sum of out+in low fares)",
+            deal["flight_price_eur"],
+            round(99.99 + 146.40, 2),
+        )
         assert_eq("AL DUB bus surcharge tracked", deal["bus_surcharge_eur"], 30.0)
+        assert_eq("AL outbound flight number has no space", deal["outbound_flight_number"], "EI154")
+        assert_eq("AL inbound flight number has no space", deal["inbound_flight_number"], "EI153")
 
     print("\n=== scanner._aer_lingus_normalise_fare: rejects morning flight ===")
-    morning = dict(fare)
-    morning["outbound"] = dict(fare["outbound"])
-    morning["outbound"]["departureDateTime"] = "2026-05-01T09:00:00"
-    deal = scanner._aer_lingus_normalise_fare(morning, "DUB")
+    morning_fare = {
+        "_origin": "DUB",
+        "_destination": "LHR",
+        "_total_price": 246.39,
+        "_outbound_flight": {
+            "trips": [{
+                "departure": {"date": "2026-05-01T09:00:00.000"},  # morning -> rejected
+                "arrival":   {"date": "2026-05-01T10:20:00.000"},
+                "info": {"code": "EI 100", "operatingAirlineCode": "EI"},
+            }],
+            "priceInfo": {"fares": [{"type": "low", "price": 99.99}]},
+        },
+        "_inbound_flight": {
+            "trips": [{
+                "departure": {"date": "2026-05-03T20:10:00.000"},
+                "arrival":   {"date": "2026-05-03T21:30:00.000"},
+                "info": {"code": "EI 153", "operatingAirlineCode": "EI"},
+            }],
+            "priceInfo": {"fares": [{"type": "low", "price": 146.40}]},
+        },
+    }
+    deal = scanner._aer_lingus_normalise_fare(morning_fare, "DUB")
     assert_eq("AL morning flight rejected", deal is None, True)
+
+
+def test_aer_lingus_fetch_helpers() -> None:
+    """Sanity-check the pure helpers that parse the Aer Lingus response."""
+    print("\n=== scanner._aer_lingus_cheapest_low_fare ===")
+    flight = {
+        "priceInfo": {
+            "fares": [
+                {"type": "low", "price": 146.40},
+                {"type": "plus", "price": 186.40},
+                {"type": "flex", "price": 219.40},
+                {"type": "aerspace", "price": 264.93},
+            ]
+        }
+    }
+    cheapest = scanner._aer_lingus_cheapest_low_fare(flight)
+    assert_eq("picks the low fare", cheapest["price"], 146.40)
+
+    # No `low` type -> returns None (plus-only flights get skipped)
+    plus_only = {
+        "priceInfo": {"fares": [{"type": "plus", "price": 351.40}]}
+    }
+    assert_eq("plus-only flight returns None", scanner._aer_lingus_cheapest_low_fare(plus_only), None)
+
+    print("\n=== scanner._aer_lingus_is_ei_operated ===")
+    ei_op = {"trips": [{"info": {"operatingAirlineCode": "EI"}}]}
+    ba_op = {"trips": [{"info": {"operatingAirlineCode": "BA"}}]}
+    assert_eq("EI-operated -> True", scanner._aer_lingus_is_ei_operated(ei_op), True)
+    assert_eq("BA codeshare -> False", scanner._aer_lingus_is_ei_operated(ba_op), False)
 
 
 def test_source_registry() -> None:
@@ -644,6 +730,7 @@ def main() -> int:
     test_find_newly_alertable()
     test_scanner_normalise()
     test_aer_lingus_normalise()
+    test_aer_lingus_fetch_helpers()
     test_source_registry()
     test_history_annotation()
     test_enrichment_photos_and_weather()
