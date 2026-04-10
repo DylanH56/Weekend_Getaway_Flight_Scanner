@@ -848,6 +848,24 @@ def _aer_lingus_fetch_fares(
     if _AER_LINGUS_DISABLED:
         return {"fares": []}
 
+    # Hard requirement: Aer Lingus is fronted by Cloudflare and needs
+    # the curl_cffi Chrome TLS fingerprint to respond. Plain `requests`
+    # appears to hang indefinitely on reads (observed at line 459 of
+    # scan #N: "curl_cffi call failed (Timeout: ...after 10002ms);
+    # falling back to plain requests" followed by an infinite stall).
+    # If curl_cffi is unavailable -- either because it's not installed
+    # or because it fell back mid-run -- refuse to talk to AL at all.
+    # Ryanair can fall back to plain requests without hanging; AL
+    # cannot. Log once on the transition.
+    if not _CURL_CFFI_AVAILABLE:
+        _AER_LINGUS_DISABLED = True
+        print(
+            "  [warn] aer_lingus: curl_cffi unavailable -- plain requests "
+            "hangs on the AL endpoint. Disabling AL for the rest of this run.",
+            file=sys.stderr,
+        )
+        return {"fares": []}
+
     # Start the wall-clock budget on the first AL call of the run.
     if _AER_LINGUS_START_TIME is None:
         _AER_LINGUS_START_TIME = time.time()
@@ -888,6 +906,19 @@ def _aer_lingus_fetch_fares(
         # too many times in a row already this run.
         if route_key in _AER_LINGUS_DEAD_ROUTES:
             continue
+
+        # Mid-loop curl_cffi check: if an earlier call in this loop
+        # already tripped the curl_cffi fallback, do NOT try the next
+        # destination with plain requests (it will hang). Abort AL.
+        if not _CURL_CFFI_AVAILABLE:
+            _AER_LINGUS_DISABLED = True
+            print(
+                "  [warn] aer_lingus: curl_cffi fell back mid-weekend -- "
+                "disabling AL for the rest of this run to avoid the "
+                "plain-requests hang.",
+                file=sys.stderr,
+            )
+            break
 
         # Mid-loop budget check: if we've blown the wall-clock budget
         # partway through a weekend, bail out immediately instead of
