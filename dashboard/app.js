@@ -244,6 +244,13 @@ function initMap() {
   return map;
 }
 
+// Stable identity for a deal -- used to match recommendations back
+// to their rendered cards even after re-render. Matches the dedupe
+// key the scanner uses server-side.
+function dealKey(d) {
+  return `${d.carrier_code || "FR"}|${d.origin}|${d.destination_iata}|${d.weekend_window || "fri_sun"}|${d.outbound_departure}`;
+}
+
 function renderDealCard(deal, idx) {
   const li = document.createElement("li");
   li.className = "deal";
@@ -256,6 +263,7 @@ function renderDealCard(deal, idx) {
     li.style.backgroundImage = `url("${deal.photo_url}")`;
   }
   li.dataset.idx = idx;
+  li.dataset.dealKey = dealKey(deal);
 
   const flightPrice = deal.flight_price_eur != null
     ? deal.flight_price_eur
@@ -669,22 +677,46 @@ async function main() {
 
     // Score each candidate: lower is better.
     //   base    = flight price
-    //   weather = bonus if weather code is clear-ish (emoji starts
-    //             with a sun or partly cloudy symbol)
-    //   cheap-bias = divide by a random factor so the same set of
-    //                "best" deals doesn't come up every click
+    //   weather = bonus if weather emoji is a sun / partly cloudy,
+    //             penalty for rain / thunder / fog
+    //   jitter  = small random component so the same "best" set
+    //             doesn't come up every click
+    //
+    // NOTE on emoji literals: Python's \U0001F327 escape does NOT
+    // work in JS strings -- backslash-capital-U isn't a recognized
+    // escape, so "\U0001F327".includes check is searching for the
+    // literal text "U0001F327" and never matches. We use the actual
+    // emoji characters directly instead, which matches the exact
+    // Unicode code points that enrichments.py WMO_CODE_MAP emits.
     const scored = candidates.map((d) => {
       const price = dealPrice(d);
       let score = price;
       const emoji = d.weather_emoji || "";
       // Sun / clear / partly-cloudy -> score bonus.
-      if (emoji.includes("\u2600") || emoji.includes("\u26C5")) score -= 15;
+      // U+2600 (sun), U+26C5 (sun behind cloud), U+1F324 (sun behind small cloud)
+      if (emoji.includes("\u2600") || emoji.includes("\u26C5") || emoji.includes("\uD83C\uDF24")) {
+        score -= 15;
+      }
       // Overcast / fog -> small penalty.
-      if (emoji.includes("\u2601") || emoji.includes("\U0001F32B")) score += 5;
-      // Any kind of rain -> heavier penalty.
-      if (emoji.includes("\U0001F327") || emoji.includes("\U0001F326")) score += 15;
+      // U+2601 (cloud), U+1F32B (fog)
+      if (emoji.includes("\u2601") || emoji.includes("\uD83C\uDF2B")) {
+        score += 5;
+      }
+      // Any kind of rain / showers -> heavier penalty.
+      // U+1F327 (cloud with rain), U+1F326 (sun behind rain cloud)
+      if (emoji.includes("\uD83C\uDF27") || emoji.includes("\uD83C\uDF26")) {
+        score += 15;
+      }
+      // Snow -> moderate penalty (depends on your tastes; ski trip bonus?).
+      // U+1F328 (cloud with snow)
+      if (emoji.includes("\uD83C\uDF28")) {
+        score += 10;
+      }
       // Thunder -> big penalty.
-      if (emoji.includes("\u26C8")) score += 25;
+      // U+26C8 (cloud with lightning and rain)
+      if (emoji.includes("\u26C8")) {
+        score += 25;
+      }
       // Tiny random jitter so repeated clicks surface variety.
       score += Math.random() * 20;
       return { deal: d, score };
@@ -692,43 +724,49 @@ async function main() {
     scored.sort((a, b) => a.score - b.score);
     const picks = scored.slice(0, 3).map((s) => s.deal);
 
-    // Clear any prior destination filter and re-render with just
-    // these three highlighted at the top.
+    // Clear any prior destination pin so the picks are visible in
+    // the full filtered list, then re-render.
     selectedDestination = null;
     render();
-    // Highlight the three picks after render has populated the list.
+
+    // After render has populated the list, match each pick to its
+    // card by stable deal key (not by city-name text match, which
+    // was fragile and why the old button appeared broken) and:
+    //   * add .highlighted to the card (green glow for 3.5s)
+    //   * scroll the first pick into view
+    //   * pan the map to fit all three picks
     setTimeout(() => {
-      const cards = listEl.querySelectorAll(".deal");
-      const pickKeys = new Set(
-        picks.map(
-          (p) =>
-            `${p.carrier_code}|${p.origin}|${p.destination_iata}|${p.outbound_departure}`
-        )
-      );
-      cards.forEach((card, i) => {
-        const d = picks[0] && candidates[i];
-        // Best-effort: highlight any card whose deal matches a pick.
-      });
-      // Scroll first pick into view and highlight it directly.
-      const firstPick = picks[0];
-      const firstCard = Array.from(cards).find((card) => {
-        const title = card.querySelector(".city")?.textContent || "";
-        return title.includes(firstPick.destination_city || firstPick.destination_iata);
-      });
-      if (firstCard) {
-        firstCard.scrollIntoView({ behavior: "smooth", block: "center" });
-        picks.forEach((p) => {
-          const matchCard = Array.from(cards).find((card) => {
-            const title = card.querySelector(".city")?.textContent || "";
-            return title.includes(p.destination_city || p.destination_iata);
-          });
-          if (matchCard) {
-            matchCard.classList.add("highlighted");
-            setTimeout(() => matchCard.classList.remove("highlighted"), 3500);
-          }
-        });
+      const pickKeys = new Set(picks.map(dealKey));
+      const cards = Array.from(listEl.querySelectorAll(".deal"));
+      const matchedCards = cards.filter((c) => pickKeys.has(c.dataset.dealKey));
+
+      if (matchedCards.length === 0) {
+        // Picks didn't end up in the visible list (shouldn't happen
+        // given they come from applyFilters, but defensive).
+        console.warn("Recommend: no matched cards for picks", picks);
+        return;
       }
-    }, 50);
+
+      matchedCards[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      matchedCards.forEach((card) => {
+        card.classList.add("highlighted");
+        setTimeout(() => card.classList.remove("highlighted"), 3500);
+      });
+
+      // Pan the map to fit the three picks if all have coordinates.
+      const coords = picks
+        .filter((p) => p.destination_lat != null && p.destination_lon != null)
+        .map((p) => [p.destination_lat, p.destination_lon]);
+      if (coords.length > 0 && typeof map !== "undefined" && map) {
+        try {
+          const bounds = L.latLngBounds(coords);
+          map.fitBounds(bounds.pad(0.3), { maxZoom: 6, animate: true });
+        } catch (e) {
+          // Leaflet not ready or bounds invalid -- silently ignore,
+          // the highlight + scroll already happened.
+        }
+      }
+    }, 60);
   });
 
   // Mobile sidebar toggle: on narrow screens the sidebar slides in
