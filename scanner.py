@@ -674,6 +674,14 @@ AER_LINGUS_FALLBACK_URLS = [
 ]
 
 _AER_LINGUS_WORKING_URL: str | None = None
+# One-shot circuit breaker: once every candidate URL has failed on
+# the first weekend we try, flip this to True and every subsequent
+# call returns an empty list immediately. Without this, a wrong URL
+# guess causes hundreds of failed calls per scan (208 weekends x 3
+# candidate URLs = 624 useless network round trips, which is what
+# was making scan #13 take 6+ minutes). Reset happens automatically
+# the next time the module is imported (fresh workflow run).
+_AER_LINGUS_DISABLED: bool = False
 
 AER_LINGUS_HEADERS = {
     "User-Agent": (
@@ -726,7 +734,14 @@ def _aer_lingus_fetch_fares(
     URL 404s or the endpoint has changed, returns an empty list
     silently -- Ryanair results will still land in the same run.
     """
-    global _AER_LINGUS_WORKING_URL
+    global _AER_LINGUS_WORKING_URL, _AER_LINGUS_DISABLED
+
+    # Circuit breaker: if a previous call already confirmed that
+    # every candidate URL is broken, don't waste time hitting them
+    # again for every weekend. Saves ~5 minutes of wall time when
+    # the AL endpoint has moved or is unreachable.
+    if _AER_LINGUS_DISABLED:
+        return {"fares": []}
 
     destinations = AER_LINGUS_DESTINATIONS.get(origin, [])
     if not destinations:
@@ -803,15 +818,18 @@ def _aer_lingus_fetch_fares(
                 continue
 
         if not succeeded and _AER_LINGUS_WORKING_URL is None:
-            # Every candidate URL failed on the very first call; bail out
-            # on this weekend's Aer Lingus calls entirely rather than
-            # hammering each URL for every destination.
+            # Every candidate URL failed. Flip the global circuit
+            # breaker so the rest of the scan skips Aer Lingus
+            # entirely -- no more wasted network time. The user will
+            # see a single "disabled for this run" line in the log.
+            _AER_LINGUS_DISABLED = True
             print(
-                f"  [warn] aer_lingus: all candidate endpoints failed, "
-                f"skipping the rest of this weekend's AL destinations",
+                f"  [warn] aer_lingus: all candidate endpoints failed on "
+                f"first weekend -- disabling Aer Lingus for the rest of "
+                f"this run.",
                 file=sys.stderr,
             )
-            break
+            return {"fares": all_fares}
         time.sleep(0.15)  # be polite
 
     return {"fares": all_fares}
