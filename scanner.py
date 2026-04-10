@@ -53,10 +53,14 @@ except ImportError:
     _curl_requests = None  # type: ignore
     _CURL_CFFI_AVAILABLE = False
 
-# When using curl_cffi, which Chrome build to impersonate. Keep the
-# numeric version aligned with the RYANAIR_HEADERS Sec-Ch-Ua fields
-# so the handshake and the headers don't contradict each other.
-CURL_IMPERSONATE = "chrome124"
+# When using curl_cffi, which Chrome build to impersonate. chrome120
+# is present in every 0.7.x release of curl_cffi, which is the floor
+# we pin in requirements.txt. chrome124/131 are newer but not in every
+# 0.7.x -- picking a safer value avoids a ValueError at runtime if pip
+# resolves to an older patch release. Keep the numeric version aligned
+# with the RYANAIR_HEADERS Sec-Ch-Ua fields so the handshake and the
+# client hints don't contradict each other.
+CURL_IMPERSONATE = "chrome120"
 
 
 def _http_get(url: str, **kwargs):
@@ -65,10 +69,27 @@ def _http_get(url: str, **kwargs):
     Routes through curl_cffi when available so the TLS handshake
     matches Chrome's; falls back to plain requests otherwise. Kept as
     a standalone helper so tests can monkey-patch exactly one symbol.
+
+    If curl_cffi is present but the requested impersonate profile is
+    unknown to the installed version (ValueError), we retry with plain
+    requests instead of crashing the whole scan.
     """
+    global _CURL_CFFI_AVAILABLE  # noqa: PLW0603
     if _CURL_CFFI_AVAILABLE:
-        kwargs.setdefault("impersonate", CURL_IMPERSONATE)
-        return _curl_requests.get(url, **kwargs)
+        try:
+            return _curl_requests.get(
+                url, impersonate=CURL_IMPERSONATE, **kwargs
+            )
+        except ValueError as e:
+            # Most likely an unsupported impersonate= value for this
+            # version of curl_cffi. Warn once and fall through to
+            # plain requests for the rest of the run.
+            print(
+                f"  [warn] curl_cffi rejected impersonate={CURL_IMPERSONATE!r}: "
+                f"{e}. Falling back to plain requests.",
+                file=sys.stderr,
+            )
+            _CURL_CFFI_AVAILABLE = False
     return requests.get(url, **kwargs)
 
 
@@ -89,15 +110,14 @@ INBOUND_TO = "23:59"
 # matching date/time/price filters, no authentication required.
 RYANAIR_URL = "https://services-api.ryanair.com/farfnd/v4/roundTripFares"
 
-# Browser-ish headers to pair with the curl_cffi Chrome impersonation.
-# Sec-Ch-Ua claims Chrome 124 because CURL_IMPERSONATE above is set to
-# "chrome124" -- the TLS handshake and the client hints must agree or
-# Cloudflare will flag the mismatch. Keep them in sync if you bump
-# either value.
+# Browser-ish headers paired with the curl_cffi Chrome 120 impersonation.
+# Keep the version number in sync with CURL_IMPERSONATE above -- the TLS
+# handshake and the client hints must agree or Cloudflare flags the
+# mismatch.
 RYANAIR_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-IE,en-GB;q=0.9,en;q=0.8",
@@ -107,7 +127,7 @@ RYANAIR_HEADERS = {
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-site",
-    "Sec-Ch-Ua": '"Google Chrome";v="124", "Chromium";v="124", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua": '"Google Chrome";v="120", "Chromium";v="120", "Not_A Brand";v="24"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Cache-Control": "no-cache",

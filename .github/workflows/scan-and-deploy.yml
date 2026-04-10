@@ -72,6 +72,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history so the pull-rebase-retry in the commit step has
+          # enough to rebase our deals.json commit onto if the push race
+          # kicks in.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -138,6 +143,13 @@ jobs:
         id: configure_pages
         continue-on-error: true
         uses: actions/configure-pages@v5
+        with:
+          # Auto-enable Pages on the repo if it isn't already. Needs
+          # the repo to be public on the free tier; "Not Found" here
+          # means the repo is still private or some other enablement
+          # precondition failed. Without this flag the action requires
+          # a manual Settings -> Pages -> Source: GitHub Actions click.
+          enablement: true
 
       - name: Upload dashboard as Pages artifact
         if: always() && steps.configure_pages.outcome == 'success'
