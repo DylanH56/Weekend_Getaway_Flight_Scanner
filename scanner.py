@@ -65,12 +65,16 @@ OUTPUT_PATH = Path(__file__).parent / "dashboard" / "deals.json"
 
 # ---------- Date helpers ----------
 def next_weekends(n: int) -> Iterator[tuple[dt.date, dt.date]]:
-    """Yield (friday, sunday) pairs for the next `n` weekends."""
+    """Yield (friday, sunday) pairs for the next `n` upcoming weekends.
+
+    Always starts from the *next* Friday, never the current day, because a
+    Friday-evening departure booked on the same Friday morning isn't a
+    realistic weekend getaway opportunity.
+    """
     today = dt.date.today()
     days_to_friday = (4 - today.weekday()) % 7  # 4 == Friday
-    # If it's already Friday afternoon, skip to next Friday.
-    if days_to_friday == 0 and dt.datetime.now().hour >= 15:
-        days_to_friday = 7
+    if days_to_friday == 0:
+        days_to_friday = 7  # skip today, always look forward
     first_friday = today + dt.timedelta(days=days_to_friday)
     for i in range(n):
         friday = first_friday + dt.timedelta(weeks=i)
