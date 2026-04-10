@@ -87,6 +87,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Diagnostic - show installed HTTP client versions
+        run: |
+          python --version
+          python -c "import requests; print(f'requests {requests.__version__}')"
+          python -c "
+          try:
+              import curl_cffi
+              print(f'curl_cffi {getattr(curl_cffi, \"__version__\", \"unknown\")}')
+              from curl_cffi import requests as cr
+              print(f'curl_cffi.requests submodule: {cr}')
+          except Exception as e:
+              print(f'curl_cffi import failed: {type(e).__name__}: {e}')
+          "
+
       - name: Run scanner
         env:
           # Both are optional -- missing secret/var => scanner simply
@@ -102,9 +116,10 @@ jobs:
           fi
 
       - name: Commit refreshed deals.json (if changed)
-        if: github.event.inputs.test_notification != 'true'
-        # Non-fatal: a lost race on the push shouldn't stop the Pages
-        # artifact upload from happening with a freshly-generated dashboard.
+        if: always() && github.event.inputs.test_notification != 'true'
+        # Non-fatal: a lost race on the push (or a scanner crash upstream)
+        # shouldn't stop the Pages artifact upload from happening with
+        # whatever deals.json is currently on disk.
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -135,7 +150,7 @@ jobs:
           exit 0
 
       - name: Upload dashboard as Pages artifact
-        if: github.event.inputs.test_notification != 'true'
+        if: always() && github.event.inputs.test_notification != 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dashboard

@@ -1,2 +1,5 @@
 requests>=2.31
-curl_cffi>=0.7.0
+# Upper bound pins against a hypothetical 1.0 that could rename modules
+# or change the Response/impersonate API. Floor at 0.6 which is the
+# earliest release that has the `requests`-compatible submodule we use.
+curl_cffi>=0.6,<1.0

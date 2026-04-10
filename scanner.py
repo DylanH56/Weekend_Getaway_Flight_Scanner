@@ -49,9 +49,15 @@ import requests
 try:
     from curl_cffi import requests as _curl_requests  # type: ignore
     _CURL_CFFI_AVAILABLE = True
+    try:
+        import curl_cffi as _curl_cffi_pkg  # type: ignore
+        _CURL_CFFI_VERSION = getattr(_curl_cffi_pkg, "__version__", "unknown")
+    except Exception:
+        _CURL_CFFI_VERSION = "unknown"
 except ImportError:
     _curl_requests = None  # type: ignore
     _CURL_CFFI_AVAILABLE = False
+    _CURL_CFFI_VERSION = "not installed"
 
 # When using curl_cffi, which Chrome build to impersonate. chrome120
 # is present in every 0.7.x release of curl_cffi, which is the floor
@@ -70,9 +76,12 @@ def _http_get(url: str, **kwargs):
     matches Chrome's; falls back to plain requests otherwise. Kept as
     a standalone helper so tests can monkey-patch exactly one symbol.
 
-    If curl_cffi is present but the requested impersonate profile is
-    unknown to the installed version (ValueError), we retry with plain
-    requests instead of crashing the whole scan.
+    If curl_cffi raises ANYTHING (unknown impersonate profile, API
+    shape change in a future release, libcurl runtime mismatch, etc.)
+    we log it, flip the global flag so subsequent calls skip
+    curl_cffi, and retry with plain requests. Never propagate a
+    curl_cffi exception to the caller -- that's what broke the last
+    CI run.
     """
     global _CURL_CFFI_AVAILABLE  # noqa: PLW0603
     if _CURL_CFFI_AVAILABLE:
@@ -80,13 +89,10 @@ def _http_get(url: str, **kwargs):
             return _curl_requests.get(
                 url, impersonate=CURL_IMPERSONATE, **kwargs
             )
-        except ValueError as e:
-            # Most likely an unsupported impersonate= value for this
-            # version of curl_cffi. Warn once and fall through to
-            # plain requests for the rest of the run.
+        except Exception as e:
             print(
-                f"  [warn] curl_cffi rejected impersonate={CURL_IMPERSONATE!r}: "
-                f"{e}. Falling back to plain requests.",
+                f"  [warn] curl_cffi call failed ({type(e).__name__}: {e}); "
+                f"falling back to plain requests for the rest of this run.",
                 file=sys.stderr,
             )
             _CURL_CFFI_AVAILABLE = False
@@ -506,7 +512,7 @@ def send_test_notification() -> int:
 
 
 # ---------- Main ----------
-def main() -> int:
+def _run() -> int:
     if "--test-notification" in sys.argv[1:]:
         return send_test_notification()
 
@@ -516,9 +522,9 @@ def main() -> int:
     all_deals: list[dict] = []
     weekends = list(next_weekends(WEEKENDS_AHEAD))
     http_client = (
-        f"curl_cffi impersonate={CURL_IMPERSONATE}"
+        f"curl_cffi v{_CURL_CFFI_VERSION} impersonate={CURL_IMPERSONATE}"
         if _CURL_CFFI_AVAILABLE
-        else "plain python-requests (likely to 403)"
+        else f"plain python-requests (curl_cffi: {_CURL_CFFI_VERSION}, likely to 403)"
     )
     print(
         f"Scanning {len(weekends)} weekends from {weekends[0][0]} "
@@ -625,6 +631,43 @@ def main() -> int:
     OUTPUT_PATH.write_text(json.dumps(payload, indent=2))
     print(f"\nWrote {len(deals)} deals to {OUTPUT_PATH}")
     return 0
+
+
+def main() -> int:
+    """Crash-proof entry point.
+
+    The previous CI run showed that any unhandled exception from the
+    scan loop blows up the whole job with a generic "exit code 1" and
+    no useful annotations. Wrap everything so that the worst case is
+    "dump the traceback, fall back to prospects mode, exit 0" -- the
+    workflow still succeeds, deals.json is still written, and the
+    actual error is visible in the step log instead of hidden behind
+    a cryptic exit code.
+    """
+    try:
+        return _run()
+    except SystemExit:
+        raise
+    except BaseException as e:  # noqa: BLE001 - last-ditch net by design
+        import traceback
+        print(
+            f"\n::error::scanner crashed with {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        traceback.print_exc(file=sys.stderr)
+        print(
+            "\nFalling back to prospects mode so deals.json still gets "
+            "written and the workflow can continue.",
+            file=sys.stderr,
+        )
+        try:
+            return write_prospects_mode(f"crashed: {type(e).__name__}")
+        except Exception as inner:
+            print(
+                f"Prospects-mode fallback ALSO crashed ({inner}); giving up.",
+                file=sys.stderr,
+            )
+            return 1
 
 
 if __name__ == "__main__":
