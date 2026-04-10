@@ -1,0 +1,102 @@
+# Scheduled scan + GitHub Pages deploy for the weekend getaway dashboard.
+#
+# Triggers on a 6-hourly cron, on pushes to main that touch the scanner
+# or dashboard, and on manual dispatch. Each run:
+#   1. Installs Python deps.
+#   2. Runs scanner.py. If KIWI_API_KEY secret is set, it fetches real
+#      fares from Kiwi Tequila and writes live deals.json. Without the
+#      secret it falls back to prospects mode (route catalogue, no
+#      prices) -- so the workflow still produces something useful.
+#   3. Commits the updated deals.json back to main (only if it actually
+#      changed, and with [skip ci] so this doesn't loop).
+#   4. Publishes the `dashboard/` folder to GitHub Pages.
+#
+# One-time setup required from you (can't be done from code):
+#   A. Settings -> Secrets and variables -> Actions -> New repository
+#      secret named KIWI_API_KEY, value = your Tequila API key.
+#      Get one at https://tequila.kiwi.com (free, no credit card).
+#   B. Settings -> Pages -> Source: "GitHub Actions".
+#   C. Merge this branch to main (or the workflow never fires on schedule).
+#   D. Actions tab -> "Scan flights and deploy dashboard" -> Run workflow
+#      to trigger the first run immediately instead of waiting for cron.
+#
+# After that it runs itself. The Pages URL appears on the workflow run
+# summary -- bookmark it.
+
+name: Scan flights and deploy dashboard
+
+on:
+  schedule:
+    # Every 6 hours at :05 past. Offset from :00 to avoid the cron
+    # thundering herd on GitHub's shared runners.
+    - cron: '5 */6 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'scanner.py'
+      - 'requirements.txt'
+      - 'dashboard/index.html'
+      - 'dashboard/app.js'
+      - 'dashboard/styles.css'
+      - '.github/workflows/scan-and-deploy.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # to commit deals.json
+  pages: write      # to deploy Pages
+  id-token: write   # to authenticate the Pages deploy
+
+# Let a new run cancel a stale deploy, but never cancel an in-progress
+# deploy itself -- that can leave Pages in a half-updated state.
+concurrency:
+  group: scan-and-deploy
+  cancel-in-progress: false
+
+jobs:
+  scan-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scanner
+        env:
+          KIWI_API_KEY: ${{ secrets.KIWI_API_KEY }}
+        run: python scanner.py
+
+      - name: Commit refreshed deals.json (if changed)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dashboard/deals.json
+          if git diff --cached --quiet; then
+            echo "No deals.json changes to commit."
+          else
+            git commit -m "chore: refresh deals.json [skip ci]"
+            git push
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload dashboard as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dashboard
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
