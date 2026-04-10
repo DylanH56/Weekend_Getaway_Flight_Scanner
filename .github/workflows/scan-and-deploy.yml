@@ -68,10 +68,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # for the deals.json commit-and-push
+    # Force JS-based actions (checkout, setup-python, upload-artifact)
+    # to Node 24 so the yellow Node 20 deprecation warning goes away.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # Full history so the pull-rebase-retry in the commit step has
           # enough to rebase our deals.json commit onto if the push race
@@ -79,7 +83,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
@@ -151,7 +155,7 @@ jobs:
 
       - name: Upload dashboard as Pages artifact
         if: always() && github.event.inputs.test_notification != 'true'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: dashboard
 
@@ -172,6 +176,12 @@ jobs:
     # Settings yet, every step here will fail/skip cleanly but the
     # workflow as a whole still shows the scan job as green success.
     continue-on-error: true
+
+    # Explicit env so every JS-based action in this job runs on
+    # Node 24 instead of the deprecated Node 20. Kills the yellow
+    # deprecation warning at the bottom of every run summary.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Configure GitHub Pages
