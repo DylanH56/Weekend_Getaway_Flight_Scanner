@@ -37,6 +37,148 @@ function dealPrice(d) {
   return p == null ? Infinity : p;
 }
 
+// ---------- Currency conversion ----------
+// Rates fetched once a day from Frankfurter (ECB, no key) and
+// cached in localStorage. EUR is the base; everything else is a
+// multiplier applied at render time.
+const CURRENCY_STORAGE_KEY = "wgfs_fx_rates_v1";
+const CURRENCY_SYMBOLS = { EUR: "\u20ac", GBP: "\u00a3", USD: "$" };
+let fxRates = { EUR: 1.0, GBP: 0.85, USD: 1.08 };  // sane fallback
+let activeCurrency = "EUR";
+
+async function loadExchangeRates() {
+  const cached = localStorage.getItem(CURRENCY_STORAGE_KEY);
+  const today = new Date().toISOString().slice(0, 10);
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      if (parsed && parsed.date === today && parsed.rates) {
+        fxRates = { EUR: 1.0, ...parsed.rates };
+        return;
+      }
+    } catch {}
+  }
+  try {
+    const res = await fetch("https://api.frankfurter.app/latest?from=EUR&to=GBP,USD");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.rates) {
+      fxRates = { EUR: 1.0, ...data.rates };
+      localStorage.setItem(
+        CURRENCY_STORAGE_KEY,
+        JSON.stringify({ date: today, rates: data.rates })
+      );
+    }
+  } catch {
+    /* stay with the hardcoded fallback */
+  }
+}
+
+function formatPrice(eur) {
+  if (eur == null || !isFinite(eur)) return "";
+  const rate = fxRates[activeCurrency] || 1;
+  const sym = CURRENCY_SYMBOLS[activeCurrency] || "\u20ac";
+  return `${sym}${(eur * rate).toFixed(0)}`;
+}
+
+// ---------- Carbon footprint ----------
+// Great-circle distance (haversine) in km, then multiply by a
+// standard short-haul economy-class factor to get an approximate
+// per-passenger CO2 figure. Based on UK DEFRA 2023 factors: short
+// haul ~0.156 kg/km, of which ~0.133 is the flight itself. This is
+// a rough-cut estimate, not a certified measurement -- good enough
+// to put a ballpark number on each card.
+const KG_CO2_PER_KM = 0.156;
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371;  // km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+const ORIGIN_COORDS = {
+  SNN: [52.702, -8.925],
+  DUB: [53.421, -6.27],
+};
+
+function estimateCO2Kg(deal) {
+  const from = ORIGIN_COORDS[deal.origin];
+  const to =
+    typeof deal.destination_lat === "number" &&
+    typeof deal.destination_lon === "number"
+      ? [deal.destination_lat, deal.destination_lon]
+      : null;
+  if (!from || !to) return null;
+  const oneWay = haversineKm(from[0], from[1], to[0], to[1]);
+  // Round trip, *2 for return journey. CO2 per passenger on a
+  // full economy short-haul seat.
+  return Math.round(oneWay * 2 * KG_CO2_PER_KM);
+}
+
+// ---------- iCal export ----------
+function fmtIcalDate(iso) {
+  // "2026-05-01T19:25:00" -> "20260501T192500"
+  if (!iso) return "";
+  return iso.replace(/[-:]/g, "").slice(0, 15);
+}
+
+function icsFor(deal) {
+  const uid = `${deal.carrier_code || "??"}-${deal.origin}-${deal.destination_iata}-${(deal.outbound_departure || "").slice(0, 10)}@weekend-getaway-scanner`;
+  const outDep = fmtIcalDate(deal.outbound_departure);
+  const outArr = fmtIcalDate(deal.outbound_arrival) || outDep;
+  const inDep = fmtIcalDate(deal.inbound_departure);
+  const inArr = fmtIcalDate(deal.inbound_arrival) || inDep;
+  const city = deal.destination_city || deal.destination_iata;
+  const now = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z";
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Weekend Getaway Flight Scanner//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${uid}-out`,
+    `DTSTAMP:${now}`,
+    `DTSTART:${outDep}`,
+    `DTEND:${outArr}`,
+    `SUMMARY:Flight ${deal.origin}\u2192${deal.destination_iata} \u2014 ${city}`,
+    `DESCRIPTION:${deal.carrier_code || ""} ${deal.outbound_flight_number || ""} \u20ac${(deal.flight_price_eur || 0).toFixed(0)} round trip`,
+    "STATUS:TENTATIVE",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    `UID:${uid}-ret`,
+    `DTSTAMP:${now}`,
+    `DTSTART:${inDep}`,
+    `DTEND:${inArr}`,
+    `SUMMARY:Flight ${deal.destination_iata}\u2192${deal.origin} (return)`,
+    `DESCRIPTION:${deal.carrier_code || ""} ${deal.inbound_flight_number || ""}`,
+    "STATUS:TENTATIVE",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ];
+  return lines.join("\r\n");
+}
+
+function downloadIcs(deal) {
+  const content = icsFor(deal);
+  const blob = new Blob([content], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const fileName = `${deal.origin}-${deal.destination_iata}-${(deal.outbound_departure || "").slice(0, 10)}.ics`;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function sortDeals(deals, mode) {
   const copy = deals.slice();
   if (mode === "price") {
@@ -120,8 +262,9 @@ function renderDealCard(deal, idx) {
     : deal.effective_price_eur;
   const hasPrice = flightPrice != null;
   const priceDisplay = hasPrice
-    ? `&euro;${flightPrice.toFixed(0)}`
+    ? formatPrice(flightPrice)
     : `<span class="price-check">check &rarr;</span>`;
+  const co2Kg = estimateCO2Kg(deal);
   const bus = deal.bus_surcharge_eur || 0;
   // Bus surcharge is now a separate small note, not rolled into the
   // headline price. SNN is still "direct from Shannon" (zero bus).
@@ -184,15 +327,33 @@ function renderDealCard(deal, idx) {
     </div>
     <div class="times">${timesHtml}</div>
     ${warnHtml}
+    <div class="extras-row">
+      ${co2Kg != null ? `<span class="extra" title="Approx per-passenger CO2 for the round trip">&#x1F33F; ~${co2Kg} kg CO&#8322;</span>` : ""}
+      <a class="extra ical" href="#" data-action="ical">&#x1F4C5; Add to calendar</a>
+    </div>
     <div class="book-row">
       <a class="book book-google" href="${deal.google_flights_url}" target="_blank" rel="noopener">Google Flights &rarr;</a>
       <a class="book book-sky" href="${deal.skyscanner_url}" target="_blank" rel="noopener">Skyscanner &rarr;</a>
     </div>
   `;
+  // Attach iCal click handler after innerHTML is set
+  const icalLink = li.querySelector('a[data-action="ical"]');
+  if (icalLink) {
+    icalLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();  // don't trigger the card's own click handler
+      downloadIcs(deal);
+    });
+  }
   return li;
 }
 
 async function main() {
+  // Kick off FX rate loading immediately so currency toggles feel
+  // snappy. Completes in the background; fallback rates are used
+  // until it resolves.
+  loadExchangeRates();
+
   const map = initMap();
   const listEl = $("deal-list");
   const metaEl = $("meta");
@@ -237,7 +398,7 @@ async function main() {
             });
             const label =
               isFinite(cheapest) && cheapest < Infinity
-                ? `&euro;${Math.round(cheapest)}`
+                ? formatPrice(cheapest)
                 : `${count}`;
             return L.divIcon({
               html: `<div class="price-badge cluster">${label} <span class="count">&middot;${count}</span></div>`,
@@ -368,7 +529,7 @@ async function main() {
       const price = dealPrice(deal);
       const selected = selectedDestination === deal.destination_iata;
       const originClass = deal.origin.toLowerCase();
-      const html = `<div class="price-badge ${originClass}${selected ? " selected" : ""}" data-iata="${deal.destination_iata}">&euro;${price.toFixed(0)}</div>`;
+      const html = `<div class="price-badge ${originClass}${selected ? " selected" : ""}" data-iata="${deal.destination_iata}">${formatPrice(price)}</div>`;
       const icon = L.divIcon({
         className: "",  // we style the inner div directly
         html,
@@ -484,6 +645,13 @@ async function main() {
   $("filter-snn").addEventListener("change", render);
   $("filter-dub").addEventListener("change", render);
   $("sort").addEventListener("change", render);
+  const currencyEl = $("currency");
+  if (currencyEl) {
+    currencyEl.addEventListener("change", () => {
+      activeCurrency = currencyEl.value;
+      render();
+    });
+  }
   $("clear-destination").addEventListener("click", () => {
     selectedDestination = null;
     render();
