@@ -153,6 +153,7 @@ function renderDealCard(deal, idx) {
     </div>
     <div class="meta-row">
       <span class="badge ${deal.origin.toLowerCase()}">${ORIGIN_LABEL[deal.origin]}</span>
+      ${deal.carrier_code ? `<span class="badge carrier carrier-${deal.carrier_code.toLowerCase()}">${deal.carrier_code}</span>` : ""}
       <span class="country">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span>
     </div>
     <div class="times">${timesHtml}</div>

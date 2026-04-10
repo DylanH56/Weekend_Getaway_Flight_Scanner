@@ -277,7 +277,7 @@ def skyscanner_url(origin: str, dest: str, out_date: str, in_date: str) -> str:
 
 
 # ---------- Ryanair fetch ----------
-def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
+def _ryanair_fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
     """Hit Ryanair's public round-trip fare-finder for a single weekend.
 
     Deliberately does NOT send outboundDepartureTimeFrom / inboundDepartureTimeFrom --
@@ -331,10 +331,10 @@ def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
 
 
 # ---------- Normalisation ----------
-# Per-run reject counters for visibility. Bumped in normalise_fare and
-# dumped at the end of the scan. Helps diagnose "Ryanair returned 700
-# fares, we kept 0" situations where we need to know WHICH gate ate
-# everything.
+# Per-run reject counters for visibility. Bumped in _*_normalise_fare
+# helpers and dumped at the end of the scan. Helps diagnose "API
+# returned 700 fares, we kept 0" situations where we need to know
+# WHICH gate ate everything.
 _reject_counts: dict[str, int] = {
     "missing_fields": 0,
     "missing_dates": 0,
@@ -342,6 +342,46 @@ _reject_counts: dict[str, int] = {
     "missing_iata": 0,
     "unknown_destination": 0,
 }
+
+
+def _apply_common_filters(
+    origin: str,
+    dest_iata: str,
+    flight_price: float,
+    out_dep: str,
+    in_dep: str,
+) -> tuple[float | None, float | None, str, str] | None:
+    """Shared post-normalisation checks used by every source.
+
+    Returns (lat, lon, out_hhmm, in_hhmm) if the fare passes all the
+    common filters (evening window, IATA present, etc); returns None
+    and bumps the appropriate reject counter otherwise.
+    """
+    if not dest_iata:
+        _reject_counts["missing_iata"] += 1
+        return None
+    if not out_dep or not in_dep:
+        _reject_counts["missing_dates"] += 1
+        return None
+
+    # Belt-and-braces evening window check.
+    out_hhmm = out_dep[11:16]
+    in_hhmm = in_dep[11:16]
+    if not (OUTBOUND_FROM <= out_hhmm <= OUTBOUND_TO):
+        _reject_counts["outside_evening_window"] += 1
+        return None
+    if not (INBOUND_FROM <= in_hhmm <= INBOUND_TO):
+        _reject_counts["outside_evening_window"] += 1
+        return None
+
+    fallback = _IATA_COORDS.get(dest_iata)
+    if fallback is not None:
+        lat, lon = fallback
+    else:
+        _reject_counts["unknown_destination"] += 1
+        lat = lon = None
+
+    return (lat, lon, out_hhmm, in_hhmm)
 
 # Supplementary IATA -> (lat, lon) map for destinations Ryanair returns
 # that aren't in EUROPE_ROUTES. EUROPE_ROUTES is deliberately kept
@@ -512,7 +552,7 @@ def _city_name(airport: dict) -> str:
     return airport.get("cityName") or airport.get("name", "")
 
 
-def normalise_fare(fare: dict, origin: str) -> dict | None:
+def _ryanair_normalise_fare(fare: dict, origin: str) -> dict | None:
     """Turn a Ryanair `fares[*]` entry into our flat deal schema."""
     try:
         outbound = fare["outbound"]
@@ -524,69 +564,32 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
         return None
 
     dest_iata = arr.get("iataCode", "")
-    if not dest_iata:
-        _reject_counts["missing_iata"] += 1
-        return None
-
     flight_price = float(summary.get("value", 0))
     bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
     effective = flight_price + bus
-
-    # Coordinates: Ryanair's farfnd/v4 used to carry these on
-    # arrivalAirport.coordinates but doesn't anymore. Try the response
-    # first (future-proofing) then fall back to our static lookup. If
-    # neither works we emit null -- the dashboard skips the map marker
-    # but still renders the card in the sidebar.
-    lat: float | None = None
-    lon: float | None = None
-    response_coords = arr.get("coordinates")
-    if isinstance(response_coords, dict):
-        try:
-            lat = float(response_coords["latitude"])
-            lon = float(response_coords["longitude"])
-        except (KeyError, TypeError, ValueError):
-            lat = lon = None
-    if lat is None:
-        fallback = _IATA_COORDS.get(dest_iata)
-        if fallback is not None:
-            lat, lon = fallback
-        else:
-            # Not in our static catalogue -- count it so we can see
-            # how many destinations are missing and decide whether
-            # to extend EUROPE_ROUTES. Still keep the deal though.
-            _reject_counts["unknown_destination"] += 1
 
     out_dep = outbound.get("departureDate", "")
     out_arr = outbound.get("arrivalDate", "")
     in_dep = inbound.get("departureDate", "")
     in_arr = inbound.get("arrivalDate", "")
-    if not out_dep or not in_dep:
-        _reject_counts["missing_dates"] += 1
-        return None
 
-    # Belt-and-braces: reject anything outside the Fri-evening /
-    # Sun-afternoon-evening windows even if Ryanair's filter let it
-    # through. A 09:20 "Friday" flight is not a weekend getaway no
-    # matter what the API says.
-    out_hhmm = out_dep[11:16]  # "YYYY-MM-DDTHH:MM:SS" -> "HH:MM"
-    in_hhmm = in_dep[11:16]
-    if not (OUTBOUND_FROM <= out_hhmm <= OUTBOUND_TO):
-        _reject_counts["outside_evening_window"] += 1
+    common = _apply_common_filters(origin, dest_iata, flight_price, out_dep, in_dep)
+    if common is None:
         return None
-    if not (INBOUND_FROM <= in_hhmm <= INBOUND_TO):
-        _reject_counts["outside_evening_window"] += 1
-        return None
+    lat, lon, _out_hhmm, _in_hhmm = common
 
     out_date = out_dep[:10]
     in_date = in_dep[:10]
 
     return {
         "origin": origin,
+        "carrier_code": "FR",
+        "carrier_name": "Ryanair",
         "destination_iata": dest_iata,
         "destination_city": _city_name(arr),
         "destination_country": arr.get("countryName", ""),
-        "destination_lat": lat,   # may be None if unknown destination
-        "destination_lon": lon,   # may be None if unknown destination
+        "destination_lat": lat,
+        "destination_lon": lon,
         "flight_price_eur": round(flight_price, 2),
         "bus_surcharge_eur": round(bus, 2),
         "effective_price_eur": round(effective, 2),
@@ -600,6 +603,305 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
         "google_flights_url": google_flights_url(origin, dest_iata, out_date, in_date),
         "skyscanner_url": skyscanner_url(origin, dest_iata, out_date, in_date),
     }
+
+
+# ---------- Aer Lingus fetch ----------
+# Aer Lingus's public fare finder exposes a JSON endpoint that the
+# www.aerlingus.com booking widget calls. It's not documented as a
+# public API so it can change without notice; treat any schema changes
+# the same way we handled Ryanair dropping `coordinates` -- log the
+# raw response via scan_log dump and iterate.
+AER_LINGUS_URL = "https://www.aerlingus.com/rest-api/rest/v1/offers/search"
+# Fallback endpoint tried if the primary one 404s. Multiple candidates
+# exist in the wild; we try each in turn the first time we encounter a
+# 404 and remember which one worked for the rest of the run.
+AER_LINGUS_FALLBACK_URLS = [
+    "https://www.aerlingus.com/api/fare-finder/low-fare-finder/v1/get-low-fares",
+    "https://www.aerlingus.com/publicapi/flight-search/v1/flights",
+]
+
+_AER_LINGUS_WORKING_URL: str | None = None
+
+AER_LINGUS_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-IE,en-GB;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin": "https://www.aerlingus.com",
+    "Referer": "https://www.aerlingus.com/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Ch-Ua": '"Google Chrome";v="120", "Chromium";v="120", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+}
+
+# Aer Lingus's network is much narrower than Ryanair's so scanning
+# every possible SNN/DUB destination for every weekend is wasteful.
+# These are the destinations we care about *in addition to* anything
+# that also shows up in Ryanair results (we dedup afterwards). SNN is
+# basically just Heathrow; DUB has broader European reach.
+AER_LINGUS_DESTINATIONS: dict[str, list[str]] = {
+    "SNN": ["LHR"],  # Shannon only flies to Heathrow on Aer Lingus
+    "DUB": [
+        "LHR", "LGW", "MAN", "EDI", "GLA", "BHX",
+        "AMS", "BRU", "CDG", "FRA", "MUC", "ZRH", "GVA",
+        "BCN", "MAD", "AGP", "ALC", "LIS", "OPO", "FAO",
+        "FCO", "MXP", "VCE", "NAP", "BLQ",
+        "PRG", "VIE", "BUD", "CPH", "ARN", "HEL",
+    ],
+}
+
+
+def _aer_lingus_fetch_fares(
+    origin: str, friday: dt.date, sunday: dt.date
+) -> dict:
+    """Query Aer Lingus's internal fare-finder endpoint for one weekend.
+
+    Aer Lingus doesn't publish farfnd-style "cheapest per route from
+    origin" so we query route-by-route: one HTTP call per destination
+    in AER_LINGUS_DESTINATIONS[origin]. That's still cheap (~1-30 calls
+    per weekend) compared to the Ryanair scan, and it gives us a real
+    flight-by-flight list rather than just the cheapest per day.
+
+    Returns a dict with a `fares` key containing a list of items in
+    a shape _aer_lingus_normalise_fare understands. If every candidate
+    URL 404s or the endpoint has changed, returns an empty list
+    silently -- Ryanair results will still land in the same run.
+    """
+    global _AER_LINGUS_WORKING_URL
+
+    destinations = AER_LINGUS_DESTINATIONS.get(origin, [])
+    if not destinations:
+        return {"fares": []}
+
+    all_fares: list[dict] = []
+
+    urls_to_try = (
+        [_AER_LINGUS_WORKING_URL]
+        if _AER_LINGUS_WORKING_URL
+        else [AER_LINGUS_URL, *AER_LINGUS_FALLBACK_URLS]
+    )
+
+    for dest in destinations:
+        params = {
+            "origin": origin,
+            "destination": dest,
+            "outboundDate": friday.isoformat(),
+            "inboundDate": sunday.isoformat(),
+            "adults": "1",
+            "children": "0",
+            "infants": "0",
+            "tripType": "RETURN",
+            "currency": "EUR",
+        }
+
+        succeeded = False
+        for url in urls_to_try:
+            if not url:
+                continue
+            try:
+                resp = _http_get(
+                    url, params=params, headers=AER_LINGUS_HEADERS, timeout=20
+                )
+                status = getattr(resp, "status_code", None)
+                if status is None:
+                    continue
+                if status == 404:
+                    continue  # try next candidate URL
+                if status >= 400:
+                    # Other error -- log the body once per destination and skip
+                    try:
+                        body = (resp.text or "")[:200].replace("\n", " ")
+                    except Exception:
+                        body = ""
+                    print(
+                        f"  [warn] aer_lingus {origin}->{dest} {friday}: "
+                        f"HTTP {status} body={body!r}",
+                        file=sys.stderr,
+                    )
+                    break
+                data = resp.json()
+                # Remember which URL worked so subsequent calls skip the 404 dance.
+                if _AER_LINGUS_WORKING_URL is None:
+                    _AER_LINGUS_WORKING_URL = url
+                    print(f"  [info] aer_lingus working endpoint: {url}", file=sys.stderr)
+                # Each fare in the response gets an extra key so the normaliser
+                # knows the origin and destination -- Aer Lingus's response
+                # doesn't always echo those back in a consistent shape.
+                fares = data.get("fares") or data.get("offers") or data.get("flights") or []
+                for f in fares:
+                    if isinstance(f, dict):
+                        f.setdefault("_origin", origin)
+                        f.setdefault("_destination", dest)
+                        all_fares.append(f)
+                succeeded = True
+                break
+            except Exception as e:
+                print(
+                    f"  [warn] aer_lingus {origin}->{dest} {friday}: "
+                    f"{type(e).__name__}: {e}",
+                    file=sys.stderr,
+                )
+                continue
+
+        if not succeeded and _AER_LINGUS_WORKING_URL is None:
+            # Every candidate URL failed on the very first call; bail out
+            # on this weekend's Aer Lingus calls entirely rather than
+            # hammering each URL for every destination.
+            print(
+                f"  [warn] aer_lingus: all candidate endpoints failed, "
+                f"skipping the rest of this weekend's AL destinations",
+                file=sys.stderr,
+            )
+            break
+        time.sleep(0.15)  # be polite
+
+    return {"fares": all_fares}
+
+
+def _aer_lingus_normalise_fare(fare: dict, origin: str) -> dict | None:
+    """Turn an Aer Lingus fare into our flat deal schema.
+
+    Handles several plausible shapes because Aer Lingus's internal
+    endpoints have churned over the years. Looks for:
+      - price: fare['price'] or fare['amount'] or fare['totalFare']['value']
+      - outbound/inbound: fare['outbound']/['inbound'] dicts with
+        departure/arrival timestamps and flight numbers
+      - destination: fare['_destination'] (set by _aer_lingus_fetch_fares)
+    """
+    try:
+        # Price extraction -- try several fields
+        price = None
+        for key in ("price", "amount", "totalAmount"):
+            v = fare.get(key)
+            if isinstance(v, (int, float)):
+                price = float(v)
+                break
+            if isinstance(v, dict) and "value" in v:
+                price = float(v["value"])
+                break
+        if price is None:
+            total = fare.get("totalFare") or fare.get("total")
+            if isinstance(total, dict):
+                price = float(total.get("value") or total.get("amount") or 0)
+        if not price:
+            _reject_counts["missing_fields"] += 1
+            return None
+
+        flight_price = float(price)
+        bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
+        effective = flight_price + bus
+
+        # Outbound / inbound extraction
+        outbound = fare.get("outbound") or (fare.get("legs") or [{}])[0] or {}
+        inbound = fare.get("inbound")
+        if inbound is None:
+            legs = fare.get("legs") or []
+            inbound = legs[1] if len(legs) > 1 else {}
+
+        out_dep = (
+            outbound.get("departureDateTime")
+            or outbound.get("departureDate")
+            or outbound.get("departure")
+            or ""
+        )
+        out_arr = (
+            outbound.get("arrivalDateTime")
+            or outbound.get("arrivalDate")
+            or outbound.get("arrival")
+            or ""
+        )
+        in_dep = (
+            inbound.get("departureDateTime")
+            or inbound.get("departureDate")
+            or inbound.get("departure")
+            or ""
+        )
+        in_arr = (
+            inbound.get("arrivalDateTime")
+            or inbound.get("arrivalDate")
+            or inbound.get("arrival")
+            or ""
+        )
+
+        dest_iata = (
+            fare.get("_destination")
+            or outbound.get("destination")
+            or outbound.get("arrivalAirportCode")
+            or ""
+        )
+
+        common = _apply_common_filters(origin, dest_iata, flight_price, out_dep, in_dep)
+        if common is None:
+            return None
+        lat, lon, _out_hhmm, _in_hhmm = common
+
+        out_flight = (
+            outbound.get("flightNumber")
+            or outbound.get("number")
+            or "EI?"
+        )
+        in_flight = (
+            inbound.get("flightNumber")
+            or inbound.get("number")
+            or "EI?"
+        )
+
+        out_date = out_dep[:10]
+        in_date = in_dep[:10]
+
+        return {
+            "origin": origin,
+            "carrier_code": "EI",
+            "carrier_name": "Aer Lingus",
+            "destination_iata": dest_iata,
+            "destination_city": dest_iata,  # AL responses vary; fall back to IATA
+            "destination_country": "",
+            "destination_lat": lat,
+            "destination_lon": lon,
+            "flight_price_eur": round(flight_price, 2),
+            "bus_surcharge_eur": round(bus, 2),
+            "effective_price_eur": round(effective, 2),
+            "currency": "EUR",
+            "outbound_departure": out_dep,
+            "outbound_arrival": out_arr,
+            "outbound_flight_number": out_flight,
+            "inbound_departure": in_dep,
+            "inbound_arrival": in_arr,
+            "inbound_flight_number": in_flight,
+            "google_flights_url": google_flights_url(origin, dest_iata, out_date, in_date),
+            "skyscanner_url": skyscanner_url(origin, dest_iata, out_date, in_date),
+        }
+    except Exception as e:
+        _reject_counts["missing_fields"] += 1
+        print(f"  [warn] aer_lingus normalise failed: {e}", file=sys.stderr)
+        return None
+
+
+# ---------- Source registry ----------
+# Each entry drives one pass through the main scan loop. `fetch`
+# takes (origin, friday, sunday) and returns a dict with a `fares`
+# list; `normalise` turns each fare into our common schema or returns
+# None. Add a new entry here to plug in another airline.
+SOURCES = [
+    {
+        "name": "ryanair",
+        "label": "Ryanair (FR)",
+        "fetch": _ryanair_fetch_fares,
+        "normalise": _ryanair_normalise_fare,
+    },
+    {
+        "name": "aer_lingus",
+        "label": "Aer Lingus (EI)",
+        "fetch": _aer_lingus_fetch_fares,
+        "normalise": _aer_lingus_normalise_fare,
+    },
+]
 
 
 # ---------- Prospects mode (no API key) ----------
@@ -765,88 +1067,114 @@ def _run() -> int:
     print(
         f"Scanning {len(weekends)} weekends from {weekends[0][0]} "
         f"to {weekends[-1][1]} for fares <= EUR {PRICE_CAP_EUR} "
-        f"(Ryanair public fare-finder, HTTP client: {http_client})..."
+        f"(sources: {', '.join(s['label'] for s in SOURCES)}, HTTP client: {http_client})..."
     )
 
-    total_calls = 0
-    failed_calls = 0
-    error_summary: dict[str, int] = {}
-    sample_dumped = False
-    for origin in ORIGINS:
-        for friday, sunday in weekends:
-            total_calls += 1
-            label = f"{origin} {friday}->{sunday}"
-            try:
-                data = fetch_fares(origin, friday, sunday)
-            except requests.HTTPError as e:
-                failed_calls += 1
-                code = e.response.status_code if e.response is not None else "?"
-                err_key = f"HTTP {code}"
-                error_summary[err_key] = error_summary.get(err_key, 0) + 1
-                # Log the body once per distinct status code so we can see
-                # Cloudflare challenge pages etc.
-                if error_summary[err_key] == 1 and e.response is not None:
-                    snippet = e.response.text[:200].replace("\n", " ")
-                    print(
-                        f"  [warn] {label}: HTTP {code}  body: {snippet!r}",
-                        file=sys.stderr,
-                    )
-                else:
-                    print(f"  [warn] {label}: HTTP {code}", file=sys.stderr)
-                continue
-            except requests.RequestException as e:
-                failed_calls += 1
-                err_key = type(e).__name__
-                error_summary[err_key] = error_summary.get(err_key, 0) + 1
-                print(f"  [warn] {label}: {err_key}: {e}", file=sys.stderr)
-                continue
+    per_source_summary: dict[str, dict] = {}
+    sample_dumped: dict[str, bool] = {s["name"]: False for s in SOURCES}
 
-            fares = data.get("fares") or []
-            # One-shot: dump the very first raw fare object we ever
-            # see so we can inspect the exact JSON shape Ryanair is
-            # sending. Crucial for diagnosing "N fares, 0 parsed"
-            # situations where the response schema doesn't match what
-            # normalise_fare expects.
-            if not sample_dumped and fares:
-                sample_dumped = True
+    for source in SOURCES:
+        source_name = source["name"]
+        source_label = source["label"]
+        fetch = source["fetch"]
+        normalise = source["normalise"]
+
+        source_calls = 0
+        source_failed = 0
+        source_deals_added = 0
+        source_error_summary: dict[str, int] = {}
+
+        print(f"\n--- {source_label} ---")
+
+        for origin in ORIGINS:
+            for friday, sunday in weekends:
+                source_calls += 1
+                label = f"{source_name} {origin} {friday}->{sunday}"
                 try:
-                    dump = json.dumps(fares[0], indent=2, default=str)
-                    if len(dump) > 3000:
-                        dump = dump[:3000] + "\n  ...(truncated)"
-                    print(
-                        f"\n--- sample raw fare from first {label} ---\n"
-                        f"{dump}\n--- end sample ---\n",
-                        file=sys.stderr,
-                    )
-                except Exception as e:
-                    print(f"  [debug] failed to dump sample fare: {e}", file=sys.stderr)
-            kept = 0
-            parsed = 0
-            for fare in fares:
-                deal = normalise_fare(fare, origin)
-                if deal is None:
+                    data = fetch(origin, friday, sunday)
+                except requests.HTTPError as e:
+                    source_failed += 1
+                    code = e.response.status_code if e.response is not None else "?"
+                    err_key = f"HTTP {code}"
+                    source_error_summary[err_key] = source_error_summary.get(err_key, 0) + 1
+                    if source_error_summary[err_key] == 1 and e.response is not None:
+                        snippet = e.response.text[:200].replace("\n", " ")
+                        print(
+                            f"  [warn] {label}: HTTP {code}  body: {snippet!r}",
+                            file=sys.stderr,
+                        )
+                    else:
+                        print(f"  [warn] {label}: HTTP {code}", file=sys.stderr)
                     continue
-                parsed += 1
-                # Filter on raw flight price -- bus surcharge is now
-                # displayed separately on the card rather than rolled
-                # into the headline number.
-                if deal["flight_price_eur"] <= PRICE_CAP_EUR:
-                    all_deals.append(deal)
-                    kept += 1
-            print(f"  {label}: {len(fares)} fares, {parsed} parsed, {kept} under cap")
-            # Be polite to the public endpoint.
-            time.sleep(0.3)
+                except requests.RequestException as e:
+                    source_failed += 1
+                    err_key = type(e).__name__
+                    source_error_summary[err_key] = source_error_summary.get(err_key, 0) + 1
+                    print(f"  [warn] {label}: {err_key}: {e}", file=sys.stderr)
+                    continue
+                except Exception as e:
+                    # Catch-all for unexpected source-level failures so
+                    # one carrier breaking can't stop the others.
+                    source_failed += 1
+                    err_key = type(e).__name__
+                    source_error_summary[err_key] = source_error_summary.get(err_key, 0) + 1
+                    print(f"  [warn] {label}: {err_key}: {e}", file=sys.stderr)
+                    continue
 
-    print(
-        f"\nRyanair scan summary: {total_calls} calls, "
-        f"{total_calls - failed_calls} ok, {failed_calls} failed, "
-        f"{len(all_deals)} deals under cap."
-    )
-    if error_summary:
+                fares = data.get("fares") or []
+                if not sample_dumped[source_name] and fares:
+                    sample_dumped[source_name] = True
+                    try:
+                        dump = json.dumps(fares[0], indent=2, default=str)
+                        if len(dump) > 3000:
+                            dump = dump[:3000] + "\n  ...(truncated)"
+                        print(
+                            f"\n--- sample raw fare from {source_name} / {origin} {friday}->{sunday} ---\n"
+                            f"{dump}\n--- end sample ---\n",
+                            file=sys.stderr,
+                        )
+                    except Exception as e:
+                        print(f"  [debug] failed to dump sample fare: {e}", file=sys.stderr)
+
+                kept = 0
+                parsed = 0
+                for fare in fares:
+                    deal = normalise(fare, origin)
+                    if deal is None:
+                        continue
+                    parsed += 1
+                    if deal["flight_price_eur"] <= PRICE_CAP_EUR:
+                        all_deals.append(deal)
+                        kept += 1
+                        source_deals_added += 1
+                print(f"  {label}: {len(fares)} fares, {parsed} parsed, {kept} under cap")
+                time.sleep(0.3)
+
+        per_source_summary[source_name] = {
+            "label": source_label,
+            "calls": source_calls,
+            "failed": source_failed,
+            "deals": source_deals_added,
+            "errors": source_error_summary,
+        }
+
+    print("\n=== Scan summary ===")
+    total_calls = 0
+    total_failed = 0
+    for name, summary in per_source_summary.items():
+        total_calls += summary["calls"]
+        total_failed += summary["failed"]
         print(
-            "Failure breakdown: "
-            + ", ".join(f"{k}={v}" for k, v in sorted(error_summary.items()))
+            f"  {summary['label']}: {summary['calls']} calls, "
+            f"{summary['calls'] - summary['failed']} ok, "
+            f"{summary['failed']} failed, {summary['deals']} deals under cap."
         )
+        if summary["errors"]:
+            print(
+                f"    error breakdown: "
+                + ", ".join(f"{k}={v}" for k, v in sorted(summary["errors"].items()))
+            )
+    print(f"  TOTAL: {total_calls} calls, {len(all_deals)} raw deals under cap.")
     rejects = [(k, v) for k, v in _reject_counts.items() if v > 0]
     if rejects:
         print(
@@ -854,21 +1182,26 @@ def _run() -> int:
             + ", ".join(f"{k}={v}" for k, v in sorted(rejects))
         )
 
-    # If Ryanair was totally unreachable (every call failed), fall back
-    # to the route-catalogue so the dashboard still has *something* to
-    # render instead of an empty deals.json.
-    if total_calls > 0 and failed_calls == total_calls:
+    # If EVERY source failed every call, fall back to prospects mode so
+    # the dashboard still has something to render.
+    if total_calls > 0 and total_failed == total_calls:
         print(
-            f"All {total_calls} Ryanair calls failed -- falling back to prospects mode.",
+            f"All {total_calls} upstream calls failed -- falling back to prospects mode.",
             file=sys.stderr,
         )
-        return write_prospects_mode("Ryanair unreachable")
+        return write_prospects_mode("All sources unreachable")
 
-    # Dedupe on (origin, destination, outbound date) keeping the cheapest
-    # *flight* price. Bus surcharge is informational only now.
-    dedup: dict[tuple[str, str, str], dict] = {}
+    # Dedupe on (carrier, origin, destination, outbound date) keeping the
+    # cheapest flight price. Multiple carriers serving the same route on
+    # the same day are kept separately so the user can compare.
+    dedup: dict[tuple[str, str, str, str], dict] = {}
     for d in all_deals:
-        key = (d["origin"], d["destination_iata"], d["outbound_departure"][:10])
+        key = (
+            d.get("carrier_code", "?"),
+            d["origin"],
+            d["destination_iata"],
+            d["outbound_departure"][:10],
+        )
         if key not in dedup or d["flight_price_eur"] < dedup[key]["flight_price_eur"]:
             dedup[key] = d
 
@@ -881,7 +1214,8 @@ def _run() -> int:
         "origins": ORIGINS,
         "weekends_scanned": len(weekends),
         "mode": "live",
-        "source": "ryanair-farfnd",
+        "sources": [s["name"] for s in SOURCES],
+        "source": "multi",  # legacy compatibility
         "deals": deals,
     }
 

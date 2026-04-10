@@ -277,9 +277,9 @@ def test_find_newly_alertable() -> None:
 
 
 def test_scanner_normalise() -> None:
-    print("\n=== scanner.normalise_fare: schema parsing ===")
+    print("\n=== scanner._ryanair_normalise_fare: schema parsing ===")
     good = fake_ryanair_response("SNN", "FAO", 55.0, out_time="19:25")["fares"][0]
-    deal = scanner.normalise_fare(good, "SNN")
+    deal = scanner._ryanair_normalise_fare(good, "SNN")
     assert_eq("deal is not None", deal is not None, True)
     if deal:
         assert_eq("destination_iata", deal["destination_iata"], "FAO")
@@ -288,14 +288,14 @@ def test_scanner_normalise() -> None:
         assert_eq("has google_flights_url", "google.com" in deal["google_flights_url"], True)
         assert_eq("has skyscanner_url", "skyscanner" in deal["skyscanner_url"], True)
 
-    print("\n=== scanner.normalise_fare: rejects morning flight ===")
+    print("\n=== scanner._ryanair_normalise_fare: rejects morning flight ===")
     morning = fake_ryanair_response("SNN", "FAO", 55.0, out_time="09:20")["fares"][0]
-    deal = scanner.normalise_fare(morning, "SNN")
+    deal = scanner._ryanair_normalise_fare(morning, "SNN")
     assert_eq("morning flight rejected", deal is None, True)
 
-    print("\n=== scanner.normalise_fare: DUB keeps raw flight price, bus separate ===")
+    print("\n=== scanner._ryanair_normalise_fare: DUB keeps raw flight price, bus separate ===")
     dub = fake_ryanair_response("DUB", "KRK", 50.0, out_time="19:25")["fares"][0]
-    deal = scanner.normalise_fare(dub, "DUB")
+    deal = scanner._ryanair_normalise_fare(dub, "DUB")
     if deal:
         assert_eq("flight_price_eur is raw Ryanair fare (no bus)",
                   deal["flight_price_eur"], 50.0)
@@ -304,7 +304,7 @@ def test_scanner_normalise() -> None:
         assert_eq("effective_price_eur kept for back-compat",
                   deal["effective_price_eur"], 80.0)
 
-    print("\n=== scanner.normalise_fare: falls back to IATA lookup for coords ===")
+    print("\n=== scanner._ryanair_normalise_fare: falls back to IATA lookup for coords ===")
     # Build a fare object that matches current Ryanair shape (no coordinates)
     fare_no_coords = {
         "outbound": {
@@ -328,7 +328,7 @@ def test_scanner_normalise() -> None:
         },
         "summary": {"price": {"value": 29.99, "currencyCode": "EUR"}},
     }
-    deal = scanner.normalise_fare(fare_no_coords, "SNN")
+    deal = scanner._ryanair_normalise_fare(fare_no_coords, "SNN")
     assert_eq("fare with no coords is kept", deal is not None, True)
     if deal:
         assert_eq("lat filled from IATA lookup",
@@ -336,7 +336,7 @@ def test_scanner_normalise() -> None:
         assert_eq("lon filled from IATA lookup",
                   abs(deal["destination_lon"] - 0.2389) < 0.01, True)
 
-    print("\n=== scanner.normalise_fare: unknown IATA keeps deal but null coords ===")
+    print("\n=== scanner._ryanair_normalise_fare: unknown IATA keeps deal but null coords ===")
     fare_unknown = {
         "outbound": {
             "departureDate": "2026-05-01T19:25:00",
@@ -358,11 +358,56 @@ def test_scanner_normalise() -> None:
         },
         "summary": {"price": {"value": 55.0, "currencyCode": "EUR"}},
     }
-    deal = scanner.normalise_fare(fare_unknown, "SNN")
+    deal = scanner._ryanair_normalise_fare(fare_unknown, "SNN")
     assert_eq("unknown-dest fare still kept", deal is not None, True)
     if deal:
         assert_eq("destination_lat is None for unknown IATA",
                   deal["destination_lat"] is None, True)
+
+
+def test_aer_lingus_normalise() -> None:
+    """Verify _aer_lingus_normalise_fare parses a plausible AL response."""
+    print("\n=== scanner._aer_lingus_normalise_fare: schema parsing ===")
+    fare = {
+        "_origin": "DUB",
+        "_destination": "LHR",
+        "price": 59.99,
+        "outbound": {
+            "departureDateTime": "2026-05-01T19:25:00",
+            "arrivalDateTime": "2026-05-01T20:55:00",
+            "flightNumber": "EI154",
+        },
+        "inbound": {
+            "departureDateTime": "2026-05-03T20:10:00",
+            "arrivalDateTime": "2026-05-03T21:30:00",
+            "flightNumber": "EI155",
+        },
+    }
+    deal = scanner._aer_lingus_normalise_fare(fare, "DUB")
+    assert_eq("AL deal parsed", deal is not None, True)
+    if deal:
+        assert_eq("carrier_code is EI", deal["carrier_code"], "EI")
+        assert_eq("carrier_name is Aer Lingus", deal["carrier_name"], "Aer Lingus")
+        assert_eq("AL dest LHR", deal["destination_iata"], "LHR")
+        assert_eq("AL flight price", deal["flight_price_eur"], 59.99)
+        assert_eq("AL DUB bus surcharge tracked", deal["bus_surcharge_eur"], 30.0)
+
+    print("\n=== scanner._aer_lingus_normalise_fare: rejects morning flight ===")
+    morning = dict(fare)
+    morning["outbound"] = dict(fare["outbound"])
+    morning["outbound"]["departureDateTime"] = "2026-05-01T09:00:00"
+    deal = scanner._aer_lingus_normalise_fare(morning, "DUB")
+    assert_eq("AL morning flight rejected", deal is None, True)
+
+
+def test_source_registry() -> None:
+    print("\n=== scanner.SOURCES registry ===")
+    names = [s["name"] for s in scanner.SOURCES]
+    assert_eq("ryanair present", "ryanair" in names, True)
+    assert_eq("aer_lingus present", "aer_lingus" in names, True)
+    for src in scanner.SOURCES:
+        assert_eq(f"{src['name']} has fetch", callable(src.get("fetch")), True)
+        assert_eq(f"{src['name']} has normalise", callable(src.get("normalise")), True)
 
 
 def test_send_test_notification() -> None:
@@ -405,8 +450,8 @@ def test_send_test_notification() -> None:
 
 
 def test_fetch_fares_uses_http_get_seam() -> None:
-    """Verify scanner.fetch_fares routes through the mockable _http_get helper."""
-    print("\n=== scanner.fetch_fares: uses _http_get seam (happy path) ===")
+    """Verify scanner._ryanair_fetch_fares routes through the mockable _http_get helper."""
+    print("\n=== scanner._ryanair_fetch_fares: uses _http_get seam (happy path) ===")
     import datetime as dt
 
     captured_kwargs: dict = {}
@@ -421,7 +466,7 @@ def test_fetch_fares_uses_http_get_seam() -> None:
         return resp
 
     with patch.object(scanner, "_http_get", side_effect=fake_http_get_ok):
-        result = scanner.fetch_fares("SNN", dt.date(2026, 5, 1), dt.date(2026, 5, 3))
+        result = scanner._ryanair_fetch_fares("SNN", dt.date(2026, 5, 1), dt.date(2026, 5, 3))
 
     assert_eq("fetch_fares returned dict", isinstance(result, dict), True)
     assert_eq("_http_get called with Ryanair URL",
@@ -435,7 +480,7 @@ def test_fetch_fares_uses_http_get_seam() -> None:
               "limit" not in params and "offset" not in params, True)
     assert_eq("params include market", params.get("market"), "en-ie")
 
-    print("\n=== scanner.fetch_fares: 400 response raises requests.HTTPError ===")
+    print("\n=== scanner._ryanair_fetch_fares: 400 response raises requests.HTTPError ===")
 
     def fake_http_get_400(url, **kwargs):
         resp = MagicMock()
@@ -446,7 +491,7 @@ def test_fetch_fares_uses_http_get_seam() -> None:
     raised = None
     with patch.object(scanner, "_http_get", side_effect=fake_http_get_400):
         try:
-            scanner.fetch_fares("SNN", dt.date(2026, 5, 1), dt.date(2026, 5, 3))
+            scanner._ryanair_fetch_fares("SNN", dt.date(2026, 5, 1), dt.date(2026, 5, 3))
         except Exception as e:
             raised = e
 
@@ -477,6 +522,8 @@ def main() -> int:
     test_notifier_scenarios()
     test_find_newly_alertable()
     test_scanner_normalise()
+    test_aer_lingus_normalise()
+    test_source_registry()
     test_send_test_notification()
     test_fetch_fares_uses_http_get_seam()
     test_deeplink_shapes()
