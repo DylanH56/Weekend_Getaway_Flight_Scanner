@@ -671,14 +671,27 @@ AER_LINGUS_URL = "https://www.aerlingus.com/api/v2/flights/fixed"
 AER_LINGUS_FALLBACK_URLS: list[str] = []
 
 _AER_LINGUS_WORKING_URL: str | None = None
-# One-shot circuit breaker: once every candidate URL has failed on
-# the first weekend we try, flip this to True and every subsequent
-# call returns an empty list immediately. Without this, a wrong URL
-# guess causes hundreds of failed calls per scan (208 weekends x 3
-# candidate URLs = 624 useless network round trips, which is what
-# was making scan #13 take 6+ minutes). Reset happens automatically
-# the next time the module is imported (fresh workflow run).
+# Global kill-switch: flipped to True only if EVERY call on the first
+# weekend fails (endpoint dead / Kasada full-block / DNS broken). Once
+# flipped, every subsequent _aer_lingus_fetch_fares returns empty
+# immediately. Reset on next module import (fresh workflow run).
 _AER_LINGUS_DISABLED: bool = False
+
+# Per-route kill-switch: (origin, dest) tuples that have failed enough
+# consecutive weekends to earn a skip for the rest of the run. Populated
+# by _aer_lingus_fetch_fares as failures accumulate. This is what
+# actually keeps the log clean when *some* routes work and others don't
+# -- e.g. LHR returns valid JSON but LGW/MAN/etc. 401 on every call.
+_AER_LINGUS_DEAD_ROUTES: set[tuple[str, str]] = set()
+# Consecutive-failure counter per (origin, dest). Reset to 0 on any
+# successful JSON parse for that route.
+_AER_LINGUS_ROUTE_FAILURES: dict[tuple[str, str], int] = {}
+# How many failures in a row before a route is marked dead.
+_AER_LINGUS_ROUTE_FAIL_THRESHOLD = 2
+# Warning dedup: (origin, dest, error_key) tuples we've already printed
+# at least once. Prevents the same HTTP 401 from being logged 13 times
+# in a row for the same route.
+_AER_LINGUS_WARNED: set[tuple[str, str, str]] = set()
 
 AER_LINGUS_HEADERS = {
     "User-Agent": (
@@ -767,6 +780,23 @@ def _aer_lingus_is_ei_operated(flight: dict) -> bool:
     return info.get("operatingAirlineCode") == "EI"
 
 
+def _maybe_warn_aer_lingus(
+    origin: str, dest: str, error_key: str, extra: str | None = None
+) -> None:
+    """Log an Aer Lingus fetch failure, but only the first occurrence of
+    each (origin, dest, error_key) tuple per run. Stops HTTP 401 from
+    being printed 13 times for the same route when that route is stuck
+    behind the same bot-check gate on every weekend."""
+    key = (origin, dest, error_key)
+    if key in _AER_LINGUS_WARNED:
+        return
+    _AER_LINGUS_WARNED.add(key)
+    msg = f"  [warn] aer_lingus {origin}->{dest}: {error_key}"
+    if extra:
+        msg += f" ({extra})"
+    print(msg, file=sys.stderr)
+
+
 def _aer_lingus_fetch_fares(
     origin: str, friday: dt.date, sunday: dt.date
 ) -> dict:
@@ -788,10 +818,14 @@ def _aer_lingus_fetch_fares(
     Either direction can have `flights: null` + a SOLD_OUT message,
     in which case we skip that destination silently.
 
-    On total failure (first destination's first call doesn't even
-    return 200), we flip _AER_LINGUS_DISABLED so the rest of the
-    scan skips AL entirely. Typical offender: Kasada bot protection
-    via the reese84 cookie.
+    Two layers of self-healing:
+      * Per-route dead-list: (origin, dest) pairs are skipped after
+        _AER_LINGUS_ROUTE_FAIL_THRESHOLD consecutive failures. Prevents
+        the log from filling with 13x the same HTTP 401 for a route
+        that's clearly not coming back this run.
+      * Global kill-switch: if the *first* weekend's *every* call fails
+        (Kasada full-block, DNS broken, etc.), flip _AER_LINGUS_DISABLED
+        and skip AL entirely for the rest of the run.
     """
     global _AER_LINGUS_WORKING_URL, _AER_LINGUS_DISABLED
 
@@ -810,8 +844,18 @@ def _aer_lingus_fetch_fares(
     ret_date_str = sunday.strftime("%d/%m/%Y")
 
     any_call_succeeded = False
+    any_call_attempted = False
 
     for dest in destinations:
+        route_key = (origin, dest)
+
+        # Per-route dead-list: silently skip routes that have failed
+        # too many times in a row already this run.
+        if route_key in _AER_LINGUS_DEAD_ROUTES:
+            continue
+
+        any_call_attempted = True
+
         params = {
             "origin": f"{origin},{dest}",        # leg1_origin,leg2_origin
             "destination": f"{dest},{origin}",   # leg1_dest,leg2_dest
@@ -828,6 +872,8 @@ def _aer_lingus_fetch_fares(
             "Referer": _aer_lingus_referer(origin, dest, friday, sunday),
         }
 
+        failure_reason: str | None = None
+        data: dict | None = None
         try:
             resp = _http_get(
                 AER_LINGUS_URL, params=params, headers=headers, timeout=20
@@ -835,24 +881,40 @@ def _aer_lingus_fetch_fares(
             status = getattr(resp, "status_code", None)
             if status is None or status >= 400:
                 try:
-                    body_snippet = (resp.text or "")[:200].replace("\n", " ")
+                    body_snippet = (resp.text or "")[:120].replace("\n", " ")
                 except Exception:
                     body_snippet = ""
+                failure_reason = f"HTTP {status}"
+                _maybe_warn_aer_lingus(
+                    origin, dest, failure_reason,
+                    extra=f"body={body_snippet!r}" if body_snippet else None,
+                )
+            else:
+                data = resp.json()
+        except Exception as e:
+            failure_reason = f"{type(e).__name__}"
+            _maybe_warn_aer_lingus(
+                origin, dest, failure_reason, extra=str(e)[:120]
+            )
+
+        if failure_reason is not None:
+            # Bump the consecutive-failure counter for this route and
+            # mark dead if threshold reached.
+            n = _AER_LINGUS_ROUTE_FAILURES.get(route_key, 0) + 1
+            _AER_LINGUS_ROUTE_FAILURES[route_key] = n
+            if n >= _AER_LINGUS_ROUTE_FAIL_THRESHOLD:
+                _AER_LINGUS_DEAD_ROUTES.add(route_key)
+                # One-time "route retired" note so the log shows when a
+                # route was given up on rather than just going silent.
                 print(
-                    f"  [warn] aer_lingus {origin}->{dest} {friday}: "
-                    f"HTTP {status} body={body_snippet!r}",
+                    f"  [info] aer_lingus {origin}->{dest}: {n} consecutive "
+                    f"failures, skipping this route for the rest of the run.",
                     file=sys.stderr,
                 )
-                continue
-            data = resp.json()
-        except Exception as e:
-            print(
-                f"  [warn] aer_lingus {origin}->{dest} {friday}: "
-                f"{type(e).__name__}: {e}",
-                file=sys.stderr,
-            )
             continue
 
+        # Success: reset the failure counter and confirm the working URL.
+        _AER_LINGUS_ROUTE_FAILURES.pop(route_key, None)
         any_call_succeeded = True
         if _AER_LINGUS_WORKING_URL is None:
             _AER_LINGUS_WORKING_URL = AER_LINGUS_URL
@@ -903,10 +965,14 @@ def _aer_lingus_fetch_fares(
 
         time.sleep(0.2)  # be polite, aerlingus.com is rate-limited
 
-    # Circuit breaker: if NOT A SINGLE call even made it to a 200
-    # response on this whole weekend, assume the endpoint is broken
-    # or Kasada is gating us, and disable AL for the rest of the run.
-    if not any_call_succeeded and _AER_LINGUS_WORKING_URL is None:
+    # Global kill-switch: if we actually TRIED calls this weekend, none
+    # of them succeeded, AND we've never seen a working response all
+    # run, the endpoint is cooked. Skip AL for the rest of the scan.
+    if (
+        any_call_attempted
+        and not any_call_succeeded
+        and _AER_LINGUS_WORKING_URL is None
+    ):
         _AER_LINGUS_DISABLED = True
         print(
             f"  [warn] aer_lingus: every call on first weekend failed -- "
