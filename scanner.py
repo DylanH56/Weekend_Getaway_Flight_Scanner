@@ -1284,6 +1284,446 @@ def _aer_lingus_normalise_fare(fare: dict, origin: str) -> dict | None:
         return None
 
 
+# ---------- easyJet fetch ----------
+#
+# easyJet (U2) availability endpoint, reverse-engineered from the
+# consumer site at www.easyjet.com/en/cheap-flights. The /ejavailability/
+# path has been stable since at least 2018 (referenced in the Apify
+# scraper and a few dormant open-source projects) though the `v16`
+# version tag has drifted over time. Response shape is NOT
+# browser-verified by us -- the first live run dumps the raw body
+# via the standard sample-fare mechanism so we can iterate if the
+# shape has drifted since the Apify reference was written.
+#
+# Protection: Imperva bot-detection (easyJet publicly discussed this
+# stack). In practice curl_cffi's chrome120 fingerprint + a realistic
+# header set has been enough for similar Imperva-fronted endpoints
+# (Aer Lingus being the proof point). Rate-limited aggressively per
+# IP, so we budget a very conservative call count.
+#
+# Opt-in: ENABLE_EASYJET env var. Unset/empty/0/false => skipped at
+# module load, entirely absent from the SOURCES registry. Flip it
+# to 1/true/yes in the workflow repo Variables to turn on.
+EASYJET_URL = "https://www.easyjet.com/ejavailability/api/v16/availability/query"
+
+EASYJET_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Ch-Ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Priority": "u=1, i",
+    # Referer will be set per-call to match the search params exactly.
+}
+
+# easyJet's network from DUB/BHX (SNN has no easyJet service at all,
+# so it's omitted). Trimmed to the most-travelled popular
+# destinations to keep per-weekend call budget very low.
+#
+#   DUB: easyJet flies DUB->GVA, LYS, MXP (seasonal), FCO (via UK hub)
+#        but DUB-direct coverage is SPARSE. We whitelist just GVA and
+#        LYS which are the two real direct routes.
+#   BHX: much broader network -- we cover the top ~10 leisure hubs.
+EASYJET_DESTINATIONS: dict[str, list[str]] = {
+    "DUB": [
+        "GVA",  # Geneva (ski)
+        "LYS",  # Lyon
+    ],
+    "BHX": [
+        "ALC",  # Alicante
+        "AGP",  # Malaga
+        "BCN",  # Barcelona
+        "FAO",  # Faro
+        "MAD",  # Madrid (seasonal)
+        "PMI",  # Palma
+        "NCE",  # Nice
+        "GVA",  # Geneva
+        "AMS",  # Amsterdam
+        "CDG",  # Paris CDG
+    ],
+    # SNN: no easyJet service, omitted.
+}
+
+# Shared dead-list + warn dedup state (mirrors Aer Lingus pattern).
+_EASYJET_DISABLED: bool = False
+_EASYJET_DEAD_ROUTES: set[tuple[str, str]] = set()
+_EASYJET_ROUTE_FAILURES: dict[tuple[str, str], int] = {}
+_EASYJET_WARNED: set[tuple[str, str, str]] = set()
+_EASYJET_START_TIME: float | None = None
+_EASYJET_BUDGET_SECONDS: float = 120.0  # smaller than AL's 180 because
+                                         # easyJet is opt-in experimental
+_EASYJET_CALL_TIMEOUT: float = 6.0
+_EASYJET_ROUTE_FAIL_THRESHOLD = 2
+
+# Opt-in switch. Read at module load, not per-run, so flipping the
+# env var requires a fresh Python process (which is what each workflow
+# run gives us anyway).
+_EASYJET_ENABLED: bool = (
+    os.environ.get("ENABLE_EASYJET", "").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+if _EASYJET_ENABLED:
+    print(
+        "  [info] easyjet: ENABLED via ENABLE_EASYJET env var "
+        "(experimental, opt-in)",
+        file=sys.stderr,
+    )
+
+
+def _maybe_warn_easyjet(origin: str, dest: str, error_key: str, extra: str | None = None) -> None:
+    """First-occurrence-only warning for easyJet failures. Same
+    dedup pattern as Aer Lingus so the log stays clean."""
+    key = (origin, dest, error_key)
+    if key in _EASYJET_WARNED:
+        return
+    _EASYJET_WARNED.add(key)
+    msg = f"  [warn] easyjet {origin}->{dest}: {error_key}"
+    if extra:
+        msg += f" ({extra})"
+    print(msg, file=sys.stderr)
+
+
+def _easyjet_fetch_fares(
+    origin: str, friday: dt.date, sunday: dt.date
+) -> dict:
+    """Query easyJet's availability endpoint for one weekend, per
+    destination. Returns a dict with a `fares` list containing
+    synthetic round-trip fare entries that _easyjet_normalise_fare
+    consumes.
+
+    Defensive throughout: any non-200, any JSON parse failure, any
+    missing field in the response all degrade gracefully to a
+    per-route skip with a dedup'd warning. Same 4-layer anti-hang
+    defense as Aer Lingus.
+    """
+    global _EASYJET_DISABLED, _EASYJET_START_TIME
+
+    if not _EASYJET_ENABLED:
+        return {"fares": []}
+    if _EASYJET_DISABLED:
+        return {"fares": []}
+    if not _CURL_CFFI_AVAILABLE:
+        _EASYJET_DISABLED = True
+        print(
+            "  [warn] easyjet: curl_cffi unavailable -- disabling.",
+            file=sys.stderr,
+        )
+        return {"fares": []}
+
+    if _EASYJET_START_TIME is None:
+        _EASYJET_START_TIME = time.time()
+    elapsed = time.time() - _EASYJET_START_TIME
+    if elapsed > _EASYJET_BUDGET_SECONDS:
+        _EASYJET_DISABLED = True
+        print(
+            f"  [warn] easyjet: budget of {_EASYJET_BUDGET_SECONDS:.0f}s "
+            f"exhausted ({elapsed:.0f}s elapsed) -- disabling.",
+            file=sys.stderr,
+        )
+        return {"fares": []}
+
+    destinations = EASYJET_DESTINATIONS.get(origin, [])
+    if not destinations:
+        return {"fares": []}
+
+    all_fares: list[dict] = []
+    # easyJet uses ISO YYYY-MM-DD for dates (unlike AL's DD/MM/YYYY).
+    dep_date = friday.isoformat()
+    ret_date = sunday.isoformat()
+
+    any_call_attempted = False
+
+    for dest in destinations:
+        route_key = (origin, dest)
+
+        if route_key in _EASYJET_DEAD_ROUTES:
+            continue
+        if not _CURL_CFFI_AVAILABLE:
+            _EASYJET_DISABLED = True
+            break
+        if time.time() - (_EASYJET_START_TIME or 0) > _EASYJET_BUDGET_SECONDS:
+            _EASYJET_DISABLED = True
+            break
+
+        any_call_attempted = True
+
+        params = {
+            "DepartureIata": origin,
+            "ArrivalIata": dest,
+            "MinDepartureDate": dep_date,
+            "MaxDepartureDate": dep_date,
+            "MinReturnDate": ret_date,
+            "MaxReturnDate": ret_date,
+            "AdultSeats": "1",
+            "ChildSeats": "0",
+            "Infants": "0",
+            "IncludePrices": "true",
+            "IncludeAdminFees": "true",
+            "IncludeLowestFareSeats": "true",
+            "LanguageCode": "EN",
+            "IsTransfer": "false",
+        }
+        headers = {
+            **EASYJET_HEADERS,
+            "Referer": (
+                f"https://www.easyjet.com/en/cheap-flights/{origin.lower()}/"
+                f"{dest.lower()}"
+            ),
+        }
+
+        failure_reason: str | None = None
+        data: dict | None = None
+        try:
+            resp = _http_get_with_watchdog(
+                EASYJET_URL,
+                watchdog_seconds=_EASYJET_CALL_TIMEOUT + 2.0,
+                params=params,
+                headers=headers,
+                timeout=_EASYJET_CALL_TIMEOUT,
+                allow_plain_fallback=False,
+            )
+            status = getattr(resp, "status_code", None)
+            if status is None or status >= 400:
+                try:
+                    body_snippet = (resp.text or "")[:120].replace("\n", " ")
+                except Exception:
+                    body_snippet = ""
+                failure_reason = f"HTTP {status}"
+                _maybe_warn_easyjet(
+                    origin, dest, failure_reason,
+                    extra=f"body={body_snippet!r}" if body_snippet else None,
+                )
+            else:
+                data = resp.json()
+        except Exception as e:
+            failure_reason = f"{type(e).__name__}"
+            _maybe_warn_easyjet(origin, dest, failure_reason, extra=str(e)[:120])
+
+        if failure_reason is not None:
+            n = _EASYJET_ROUTE_FAILURES.get(route_key, 0) + 1
+            _EASYJET_ROUTE_FAILURES[route_key] = n
+            if n >= _EASYJET_ROUTE_FAIL_THRESHOLD:
+                _EASYJET_DEAD_ROUTES.add(route_key)
+                print(
+                    f"  [info] easyjet {origin}->{dest}: {n} consecutive "
+                    f"failures, skipping this route for the rest of the run.",
+                    file=sys.stderr,
+                )
+            continue
+
+        _EASYJET_ROUTE_FAILURES.pop(route_key, None)
+
+        # Response shape is NOT browser-verified. We guess at likely
+        # field names based on the Apify/fgparamio scraper references
+        # and guard every access so a shape mismatch degrades to a
+        # per-route skip rather than crashing the scan. If the first
+        # successful call has a completely different structure, the
+        # sample-dump in _run() will show us the real shape and we
+        # can iterate.
+        if not isinstance(data, dict):
+            continue
+
+        # Try multiple candidate top-level keys for the flight list.
+        flight_list = (
+            data.get("AvailableFlights")
+            or data.get("Flights")
+            or data.get("availableFlights")
+            or (data.get("data") or {}).get("flights")
+            or []
+        )
+        if not isinstance(flight_list, list) or not flight_list:
+            continue
+
+        # Pair up outbound and inbound flights. easyJet's availability
+        # endpoint returns them in a single combined list with a
+        # direction field, OR as separate Outbound/Inbound subtrees.
+        # Handle both shapes.
+        out_flights = [
+            f for f in flight_list
+            if isinstance(f, dict)
+            and str(f.get("Direction", f.get("direction", ""))).lower() in ("outbound", "out", "o")
+        ]
+        in_flights = [
+            f for f in flight_list
+            if isinstance(f, dict)
+            and str(f.get("Direction", f.get("direction", ""))).lower() in ("inbound", "return", "in", "r")
+        ]
+
+        # Fallback: if the flat list didn't carry direction info, try
+        # the sub-tree shape.
+        if not out_flights or not in_flights:
+            out_flights = (data.get("Outbound") or {}).get("Flights") or []
+            in_flights = (data.get("Inbound") or {}).get("Flights") or []
+
+        if not out_flights or not in_flights:
+            continue
+
+        # Pick cheapest on each side. Field name guesses based on
+        # Apify reference; guard against missing.
+        def _price_of(f: dict) -> float | None:
+            for key in ("TotalPrice", "Price", "LowestFarePrice", "price", "totalPrice"):
+                v = f.get(key)
+                if isinstance(v, (int, float)):
+                    return float(v)
+                if isinstance(v, dict):
+                    inner = v.get("Amount") or v.get("amount") or v.get("Value")
+                    if isinstance(inner, (int, float)):
+                        return float(inner)
+            return None
+
+        out_priced = [(f, _price_of(f)) for f in out_flights]
+        out_priced = [(f, p) for f, p in out_priced if p is not None]
+        in_priced = [(f, _price_of(f)) for f in in_flights]
+        in_priced = [(f, p) for f, p in in_priced if p is not None]
+        if not out_priced or not in_priced:
+            continue
+
+        out_priced.sort(key=lambda x: x[1])
+        in_priced.sort(key=lambda x: x[1])
+        out_flight, out_price = out_priced[0]
+        in_flight, in_price = in_priced[0]
+
+        all_fares.append({
+            "_origin": origin,
+            "_destination": dest,
+            "_total_price": out_price + in_price,
+            "_outbound_flight": out_flight,
+            "_inbound_flight": in_flight,
+        })
+
+        time.sleep(0.2)  # be polite -- easyJet's Imperva will throttle on bursts
+
+    if (
+        any_call_attempted
+        and not all_fares
+        and not _EASYJET_DISABLED
+    ):
+        # First-weekend total failure: disable for the run. Same
+        # safety valve as Aer Lingus.
+        _EASYJET_DISABLED = True
+        print(
+            "  [warn] easyjet: every call on first weekend failed -- "
+            "disabling for the rest of this run.",
+            file=sys.stderr,
+        )
+
+    return {"fares": all_fares}
+
+
+def _easyjet_normalise_fare(fare: dict, origin: str) -> dict | None:
+    """Turn a synthetic easyJet round-trip fare into our flat deal
+    schema. Input is the dict built by _easyjet_fetch_fares above.
+
+    Field-name extraction is defensive -- multiple candidate names
+    tried for each field, nulls propagate safely, exceptions log
+    once and return None so one bad fare doesn't kill the whole
+    response.
+    """
+    try:
+        origin_iata = fare.get("_origin", origin)
+        dest_iata = fare.get("_destination")
+        total_price = fare.get("_total_price")
+        out_flight = fare.get("_outbound_flight") or {}
+        in_flight = fare.get("_inbound_flight") or {}
+
+        if dest_iata is None or total_price is None:
+            _reject_counts["missing_fields"] += 1
+            return None
+
+        def _get_ts(f: dict, *keys: str) -> str | None:
+            for k in keys:
+                v = f.get(k)
+                if isinstance(v, str) and v:
+                    return v
+            return None
+
+        out_dep = _get_ts(out_flight, "DepartureDateTime", "departureDateTime", "Departure", "departure")
+        out_arr = _get_ts(out_flight, "ArrivalDateTime", "arrivalDateTime", "Arrival", "arrival")
+        in_dep = _get_ts(in_flight, "DepartureDateTime", "departureDateTime", "Departure", "departure")
+        in_arr = _get_ts(in_flight, "ArrivalDateTime", "arrivalDateTime", "Arrival", "arrival")
+
+        if not out_dep or not in_dep:
+            _reject_counts["missing_fields"] += 1
+            return None
+
+        out_flight_num = (
+            out_flight.get("FlightNumber")
+            or out_flight.get("flightNumber")
+            or "U2 ?"
+        )
+        in_flight_num = (
+            in_flight.get("FlightNumber")
+            or in_flight.get("flightNumber")
+            or "U2 ?"
+        )
+
+        common = _apply_common_filters(
+            origin_iata, dest_iata, float(total_price), out_dep, in_dep
+        )
+        if common is None:
+            return None
+
+        return {
+            **common,
+            "currency": "EUR",
+            "outbound_departure": out_dep,
+            "outbound_arrival": out_arr or out_dep,
+            "outbound_flight_number": str(out_flight_num),
+            "inbound_departure": in_dep,
+            "inbound_arrival": in_arr or in_dep,
+            "inbound_flight_number": str(in_flight_num),
+            "carrier_code": "U2",
+            "carrier_name": "easyJet",
+            "google_flights_url": google_flights_url(
+                origin_iata, dest_iata, out_dep[:10], in_dep[:10]
+            ),
+            "skyscanner_url": skyscanner_url(
+                origin_iata, dest_iata, out_dep[:10], in_dep[:10]
+            ),
+        }
+    except Exception as e:
+        _reject_counts["missing_fields"] += 1
+        print(f"  [warn] easyjet normalise failed: {e}", file=sys.stderr)
+        return None
+
+
+# ---------- Punted carriers: Jet2 and Vueling ----------
+# Investigated in session 01QJRsJg6woitt3nmdwvKQdr and deliberately
+# not implemented:
+#
+#   Jet2 (LS):
+#     * No public JSON endpoint has ever been reverse-engineered
+#       publicly. Zero Python/Go/PHP scrapers on GitHub after 10+
+#       years. Heavy Imperva/Incapsula protection + JS-rendered
+#       pricing.
+#     * Implementation would require full browser automation
+#       (Playwright + stealth), which doesn't fit the GitHub
+#       Actions runner model cleanly (install size, flakiness,
+#       runtime).
+#     * Punt indefinitely unless we move to a self-hosted runner
+#       with Chromium installed.
+#
+#   Vueling (VY):
+#     * Vueling has a legitimate /developer/flightcalendar/ API
+#       but it requires a Bearer token obtained via partner login
+#       -- not self-serve anonymous access.
+#     * The consumer booking site is a JS-heavy SPA behind bot
+#       protection; no known anonymous endpoint.
+#     * Revisit only if Vueling opens self-serve developer access
+#       or if a reverse-engineered SPA endpoint surfaces publicly.
+#
+# easyJet (above) is the only one of the three three with a confirmed
+# anonymous JSON endpoint. See EASYJET_URL for the implementation.
+
+
 # ---------- Source registry ----------
 # Each entry drives one pass through the main scan loop. `fetch`
 # takes (origin, friday, sunday) and returns a dict with a `fares`
@@ -1317,6 +1757,20 @@ SOURCES = [
         "max_weekends": 3,
     },
 ]
+
+# easyJet is opt-in via the ENABLE_EASYJET env var. When enabled, we
+# append it to SOURCES at module load so the main loop picks it up
+# without any further conditionals. Scan scope is deliberately small
+# (fri_sun x 3 weekends) to stay inside the total 120s easyJet budget.
+if _EASYJET_ENABLED:
+    SOURCES.append({
+        "name": "easyjet",
+        "label": "easyJet (U2)",
+        "fetch": _easyjet_fetch_fares,
+        "normalise": _easyjet_normalise_fare,
+        "windows": ["fri_sun"],
+        "max_weekends": 3,
+    })
 
 
 # ---------- Prospects mode (no API key) ----------
@@ -1525,7 +1979,7 @@ def _clear_scan_watchdog() -> None:
 # shows behaviour that doesn't match this ID's claimed features,
 # the runner is executing stale code. Look for this exact string
 # in the log to know which build is live.
-SCANNER_BUILD_ID = "build-2026-04-10.8 (enrich budget=90s, AL=3w, SIGALRM=600s)"
+SCANNER_BUILD_ID = "build-2026-04-10.9 (easyJet opt-in U2, enrich 90s, AL=3w)"
 
 
 def _run() -> int:
