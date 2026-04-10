@@ -448,7 +448,53 @@ async function main() {
     render();
   });
 
+  // Mobile sidebar toggle: on narrow screens the sidebar slides in
+  // from the right when the hamburger is tapped. Toggling the class
+  // on <body> is enough; the CSS media query handles the rest.
+  const toggle = $("sidebar-toggle");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      document.body.classList.toggle("sidebar-open");
+    });
+  }
+
+  // Auto-refresh: every 10 minutes, re-fetch deals.json and re-render
+  // if the generated_at timestamp changed. Only runs while the tab
+  // is visible so background tabs don't pile up network requests.
+  async function pollForUpdates() {
+    if (document.hidden) return;
+    try {
+      const res = await fetch("deals.json", { cache: "no-store" });
+      if (!res.ok) return;
+      const fresh = await res.json();
+      if (
+        fresh.generated_at &&
+        fresh.generated_at !== payload.generated_at
+      ) {
+        payload = fresh;
+        render();
+      }
+    } catch (e) {
+      // Network failure -- ignore, the next tick will try again.
+    }
+  }
+  setInterval(pollForUpdates, 10 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) pollForUpdates();
+  });
+
   render();
+}
+
+// Register the service worker so the dashboard is installable as a
+// PWA and works offline after the first load. Only in secure contexts
+// (https or localhost) and only if the browser supports it.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch((err) => {
+      console.warn("Service worker registration failed:", err);
+    });
+  });
 }
 
 main();

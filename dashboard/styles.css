@@ -517,13 +517,68 @@ main {
 
 .leaflet-container a.leaflet-popup-close-button { color: #94a3b8; }
 
+.sidebar-toggle {
+  display: none;
+  background: none;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  align-items: center;
+  flex-direction: column;
+  gap: 4px;
+}
+.sidebar-toggle .bar {
+  width: 20px;
+  height: 2px;
+  background: #cbd5e1;
+  border-radius: 2px;
+  transition: background .1s;
+}
+.sidebar-toggle:hover .bar { background: #f8fafc; }
+
 @media (max-width: 900px) {
+  header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header .meta { text-align: left; font-size: 10px; }
+  .sidebar-toggle { display: inline-flex; }
+
   main {
     grid-template-columns: 1fr;
-    grid-template-rows: 45vh 1fr;
-    height: auto;
+    grid-template-rows: 1fr;
+    height: calc(100vh - 72px);
+    position: relative;
   }
-  #sidebar { border-left: none; border-top: 1px solid #1f2a44; }
-  header { flex-direction: column; align-items: flex-start; }
-  header .meta { text-align: left; }
+  #map {
+    grid-column: 1;
+    grid-row: 1;
+    z-index: 1;
+  }
+  /* Sidebar slides in from the right as an overlay instead of
+   * stacking below the map. Toggle via body.sidebar-open. */
+  #sidebar {
+    grid-column: 1;
+    grid-row: 1;
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: min(92vw, 440px);
+    height: 100%;
+    border-left: 1px solid #1f2a44;
+    border-top: none;
+    transform: translateX(100%);
+    transition: transform .2s ease-out;
+    z-index: 1000;
+    box-shadow: -4px 0 18px rgba(0, 0, 0, 0.4);
+  }
+  body.sidebar-open #sidebar {
+    transform: translateX(0);
+  }
+  /* Small close hint via the toggle button changing colour */
+  body.sidebar-open .sidebar-toggle {
+    border-color: #38bdf8;
+  }
 }
