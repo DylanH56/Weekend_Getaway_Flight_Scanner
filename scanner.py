@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
 """Weekend Getaway Flight Scanner.
 
-Scans the Kiwi.com Tequila API for cheap round-trip weekend flights
-(Fri evening out, Sun evening back) from Shannon (preferred) and
-Dublin into Europe, capped at EUR 100. Dublin fares are adjusted
+Scans Ryanair's public fare-finder API for cheap round-trip weekend
+flights (Fri evening out, Sun evening back) from Shannon (preferred)
+and Dublin into Europe, capped at EUR 100. Dublin fares are adjusted
 upward by the cost of a return Limerick<->Dublin bus so the two
 origins can be compared on an "effective price from Limerick" basis.
 
-Booking links point at Google Flights and Skyscanner (stable public
-URL schemes), not the carrier's own site. Kiwi aggregates Ryanair,
-Aer Lingus, Wizz, easyJet and others, so coverage is broader than
-hitting Ryanair directly.
+Ryanair's fare-finder endpoint is public, unauthenticated, and used
+by ryanair.com's own "fare finder" page. No API key. No signup. It
+covers Ryanair only -- which for SNN and short-haul DUB is roughly
+the entire relevant market anyway.
+
+Booking links in the output still point at Google Flights and
+Skyscanner because those are the URL schemes that hold up across
+reloads; we just use Ryanair as the data source, not the booking
+target.
 
 Setup:
-    1. Get a free API key from https://tequila.kiwi.com
-    2. export KIWI_API_KEY='your-key-here'
-    3. pip install -r requirements.txt
-    4. python scanner.py
+    pip install -r requirements.txt
+    python scanner.py
+
+Set SCANNER_PROSPECTS_ONLY=1 in the environment to force the
+route-catalogue fallback (useful for offline/sandbox testing, or if
+Ryanair's endpoint is ever unreachable).
 
 Writes the results to dashboard/deals.json for the front-end to render.
 """
@@ -40,38 +47,45 @@ BUS_RETURN_COST_EUR = 30.0
 ORIGINS = ["SNN", "DUB"]  # Shannon first, Dublin as fallback.
 WEEKENDS_AHEAD = 26       # Scan ~6 months of upcoming weekends (live mode).
 
-# European destinations to include. Kiwi accepts a comma-separated list
-# of 2-letter country codes as `fly_to`. Ireland is excluded.
-EUROPE_COUNTRIES = (
-    "GB,FR,DE,ES,IT,PT,NL,BE,LU,AT,CH,CZ,PL,HU,SK,SI,HR,"
-    "GR,RO,BG,RS,ME,MK,AL,BA,SE,DK,NO,FI,EE,LV,LT,IS,MT,CY"
-)
-
 # Friday evening departures and Sunday afternoon/evening returns.
 OUTBOUND_FROM = "16:00"
 OUTBOUND_TO = "23:59"
 INBOUND_FROM = "15:00"
 INBOUND_TO = "23:59"
 
-# Weekend getaways: direct flights only, cabin bag implicit.
-MAX_STOPOVERS = 0
-MAX_FLY_DURATION_HOURS = 5
+# Ryanair's public fare-finder endpoint. Returns round-trip fares
+# matching date/time/price filters, no authentication required.
+RYANAIR_URL = "https://services-api.ryanair.com/farfnd/v4/roundTripFares"
 
-KIWI_URL = "https://api.tequila.kiwi.com/v2/search"
-API_KEY = os.environ.get("KIWI_API_KEY", "").strip()
+# Browser-ish headers to be polite and look like the ryanair.com
+# fare-finder page that normally calls this endpoint.
+RYANAIR_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-IE,en;q=0.9",
+    "Origin": "https://www.ryanair.com",
+    "Referer": "https://www.ryanair.com/",
+}
 
 OUTPUT_PATH = Path(__file__).parent / "dashboard" / "deals.json"
 
+# Force prospects-mode fallback even when Ryanair would be reachable.
+# Useful for offline/sandbox runs.
+FORCE_PROSPECTS = bool(os.environ.get("SCANNER_PROSPECTS_ONLY", "").strip())
+
 # How many upcoming weekends to generate prospect links for when we
-# have no API key and can only act as a route catalogue. Kept smaller
-# than the live-mode window because prospects mode has no price filter
-# and the card count is `routes x weekends`, which balloons fast.
+# fall back to the route catalogue. Kept smaller than the live-mode
+# window because prospects mode has no price filter and the card
+# count is `routes x weekends`, which balloons fast.
 PROSPECTS_WEEKENDS = 8
 
 # Verified direct routes to Europe from Shannon and Dublin (Ryanair /
-# Aer Lingus / easyJet as of recent schedules). Used for "prospects"
-# mode when no Kiwi API key is available -- every (origin, dest)
-# entry becomes a click-through card to Google Flights / Skyscanner.
+# Aer Lingus as of recent schedules). Used ONLY for the prospects-mode
+# fallback (when Ryanair's live endpoint is unreachable); every (origin,
+# dest) entry becomes a click-through card to Google Flights / Skyscanner.
 # Prices are intentionally NOT included; follow the links to check live.
 EUROPE_ROUTES: dict[str, list[tuple[str, str, str, float, float]]] = {
     "SNN": [
@@ -161,11 +175,6 @@ def next_weekends(n: int) -> Iterator[tuple[dt.date, dt.date]]:
         yield friday, sunday
 
 
-def kiwi_date(d: dt.date) -> str:
-    """Kiwi Tequila expects DD/MM/YYYY."""
-    return d.strftime("%d/%m/%Y")
-
-
 # ---------- Deep-link builders ----------
 def google_flights_url(origin: str, dest: str, out_date: str, in_date: str) -> str:
     """Stable Google Flights search URL using the natural-language `q` param."""
@@ -183,81 +192,75 @@ def skyscanner_url(origin: str, dest: str, out_date: str, in_date: str) -> str:
     )
 
 
-# ---------- Kiwi fetch ----------
+# ---------- Ryanair fetch ----------
 def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
+    """Hit Ryanair's public round-trip fare-finder for a single weekend."""
     params = {
-        "fly_from": origin,
-        "fly_to": EUROPE_COUNTRIES,
-        "date_from": kiwi_date(friday),
-        "date_to": kiwi_date(friday),
-        "return_from": kiwi_date(sunday),
-        "return_to": kiwi_date(sunday),
-        "flight_type": "round",
-        "curr": "EUR",
-        # Ask for slightly more than our cap so Dublin fares that would fit
-        # after adding the bus surcharge still come through.
-        "price_to": int(PRICE_CAP_EUR + BUS_RETURN_COST_EUR),
-        "max_stopovers": MAX_STOPOVERS,
-        "max_fly_duration": MAX_FLY_DURATION_HOURS,
-        "dtime_from": OUTBOUND_FROM,
-        "dtime_to": OUTBOUND_TO,
-        "ret_dtime_from": INBOUND_FROM,
-        "ret_dtime_to": INBOUND_TO,
-        "adults": 1,
-        "limit": 200,
-        "sort": "price",
-        "asc": 1,
+        "departureAirportIataCode": origin,
+        "outboundDepartureDateFrom": friday.isoformat(),
+        "outboundDepartureDateTo": friday.isoformat(),
+        "outboundDepartureTimeFrom": OUTBOUND_FROM,
+        "outboundDepartureTimeTo": OUTBOUND_TO,
+        "inboundDepartureDateFrom": sunday.isoformat(),
+        "inboundDepartureDateTo": sunday.isoformat(),
+        "inboundDepartureTimeFrom": INBOUND_FROM,
+        "inboundDepartureTimeTo": INBOUND_TO,
+        # Ask for slightly more than our cap so Dublin fares that still
+        # fit after adding the bus surcharge come through.
+        "priceValueTo": str(int(PRICE_CAP_EUR + BUS_RETURN_COST_EUR)),
+        "currency": "EUR",
+        "market": "en-ie",
+        "adultPaxCount": "1",
+        "limit": "200",
+        "offset": "0",
     }
-    headers = {"apikey": API_KEY, "accept": "application/json"}
-    resp = requests.get(KIWI_URL, params=params, headers=headers, timeout=30)
+    resp = requests.get(
+        RYANAIR_URL, params=params, headers=RYANAIR_HEADERS, timeout=30
+    )
     resp.raise_for_status()
     return resp.json()
 
 
 # ---------- Normalisation ----------
-def normalise_fare(item: dict, origin: str) -> dict | None:
-    """Turn a Kiwi `data[*]` entry into our flat deal schema."""
-    dest_iata = item.get("flyTo")
-    if not dest_iata:
+def _city_name(airport: dict) -> str:
+    city = airport.get("city")
+    if isinstance(city, dict):
+        return city.get("name") or airport.get("name", "")
+    return airport.get("cityName") or airport.get("name", "")
+
+
+def normalise_fare(fare: dict, origin: str) -> dict | None:
+    """Turn a Ryanair `fares[*]` entry into our flat deal schema."""
+    try:
+        outbound = fare["outbound"]
+        inbound = fare["inbound"]
+        arr = outbound["arrivalAirport"]
+        summary = fare["summary"]["price"]
+    except (KeyError, TypeError):
         return None
 
+    flight_price = float(summary.get("value", 0))
+    bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
+    effective = flight_price + bus
+
+    coords = arr.get("coordinates") or {}
     try:
-        lat = float(item["latTo"])
-        lon = float(item["lngTo"])
+        lat = float(coords["latitude"])
+        lon = float(coords["longitude"])
     except (KeyError, TypeError, ValueError):
         return None
 
-    price = float(item.get("price", 0))
-    bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
-    effective = price + bus
-
-    country = item.get("countryTo") or {}
-    country_name = country.get("name", "") if isinstance(country, dict) else ""
-
-    # A round-trip item's `route` contains segments tagged with `return`:
-    # 0 for outbound legs, 1 for inbound legs.
-    route = item.get("route") or []
-    outbound_segs = [s for s in route if s.get("return", 0) == 0]
-    inbound_segs = [s for s in route if s.get("return", 0) == 1]
-    if not outbound_segs or not inbound_segs:
-        return None
-
-    out_first, out_last = outbound_segs[0], outbound_segs[-1]
-    in_first, in_last = inbound_segs[0], inbound_segs[-1]
-
-    out_dep = out_first.get("local_departure", "")
-    out_arr = out_last.get("local_arrival", "")
-    in_dep = in_first.get("local_departure", "")
-    in_arr = in_last.get("local_arrival", "")
-
+    out_dep = outbound.get("departureDate", "")
+    out_arr = outbound.get("arrivalDate", "")
+    in_dep = inbound.get("departureDate", "")
+    in_arr = inbound.get("arrivalDate", "")
     if not out_dep or not in_dep:
         return None
 
     # Belt-and-braces: reject anything outside the Fri-evening /
-    # Sun-afternoon-evening windows even if Kiwi returned it. This is
-    # what the previous sandbox experiment tripped on: a 09:20 morning
-    # flight was not a "Friday evening getaway" no matter what the API
-    # said. Compare on the HH:MM slice of the ISO local_departure.
+    # Sun-afternoon-evening windows even if Ryanair's filter let it
+    # through. A 09:20 "Friday" flight is not a weekend getaway no
+    # matter what the API says.
     out_hhmm = out_dep[11:16]  # "YYYY-MM-DDTHH:MM:SS" -> "HH:MM"
     in_hhmm = in_dep[11:16]
     if not (OUTBOUND_FROM <= out_hhmm <= OUTBOUND_TO):
@@ -265,29 +268,29 @@ def normalise_fare(item: dict, origin: str) -> dict | None:
     if not (INBOUND_FROM <= in_hhmm <= INBOUND_TO):
         return None
 
+    dest_iata = arr.get("iataCode", "")
+    if not dest_iata:
+        return None
     out_date = out_dep[:10]
     in_date = in_dep[:10]
-
-    out_flight = f"{out_first.get('airline', '')}{out_first.get('flight_no', '')}".strip()
-    in_flight = f"{in_first.get('airline', '')}{in_first.get('flight_no', '')}".strip()
 
     return {
         "origin": origin,
         "destination_iata": dest_iata,
-        "destination_city": item.get("cityTo", dest_iata),
-        "destination_country": country_name,
+        "destination_city": _city_name(arr),
+        "destination_country": arr.get("countryName", ""),
         "destination_lat": lat,
         "destination_lon": lon,
-        "flight_price_eur": round(price, 2),
+        "flight_price_eur": round(flight_price, 2),
         "bus_surcharge_eur": round(bus, 2),
         "effective_price_eur": round(effective, 2),
-        "currency": "EUR",
+        "currency": summary.get("currencyCode", "EUR"),
         "outbound_departure": out_dep,
         "outbound_arrival": out_arr,
-        "outbound_flight_number": out_flight,
+        "outbound_flight_number": outbound.get("flightNumber", ""),
         "inbound_departure": in_dep,
         "inbound_arrival": in_arr,
-        "inbound_flight_number": in_flight,
+        "inbound_flight_number": inbound.get("flightNumber", ""),
         "google_flights_url": google_flights_url(origin, dest_iata, out_date, in_date),
         "skyscanner_url": skyscanner_url(origin, dest_iata, out_date, in_date),
     }
@@ -304,9 +307,10 @@ PROSPECTS_TIME_NOTE = (
 def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
     """Every known route x every upcoming weekend, with NO price data.
 
-    Used as an honest fallback when we don't have a Kiwi API key: we
-    can't claim to know fares, so we produce click-through cards that
-    open Google Flights / Skyscanner for the user to check live prices.
+    Used as a fallback when Ryanair's live endpoint is unreachable (or
+    when SCANNER_PROSPECTS_ONLY is set for testing). We can't claim to
+    know fares in this mode, so we emit click-through cards that open
+    Google Flights / Skyscanner for the user to check live prices.
 
     IMPORTANT: prospects mode CANNOT enforce the Fri-evening / Sun-evening
     time window -- neither Google Flights' `?q=` scheme nor Skyscanner's
@@ -347,7 +351,7 @@ def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
     return entries
 
 
-def write_prospects_mode() -> int:
+def write_prospects_mode(reason: str = "") -> int:
     weekends = list(next_weekends(PROSPECTS_WEEKENDS))
     entries = build_prospects(weekends)
     # Sort: soonest weekend first, Shannon ahead of Dublin, then country/city.
@@ -371,52 +375,63 @@ def write_prospects_mode() -> int:
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(json.dumps(payload, indent=2))
+    prefix = f"{reason} -- " if reason else ""
     print(
-        f"No KIWI_API_KEY set -- writing {len(entries)} route prospects "
+        f"{prefix}writing {len(entries)} route prospects "
         f"({sum(len(v) for v in EUROPE_ROUTES.values())} routes x "
-        f"{len(weekends)} weekends) to {OUTPUT_PATH}.\n"
-        f"\n"
-        f"Click any Google Flights / Skyscanner link in the dashboard to "
-        f"see the live price. For automated under-EUR {PRICE_CAP_EUR:.0f} "
-        f"filtering, get a free key at https://tequila.kiwi.com and set "
-        f"KIWI_API_KEY."
+        f"{len(weekends)} weekends) to {OUTPUT_PATH}."
     )
     return 0
 
 
 # ---------- Main ----------
 def main() -> int:
-    if not API_KEY:
-        return write_prospects_mode()
+    if FORCE_PROSPECTS:
+        return write_prospects_mode("SCANNER_PROSPECTS_ONLY set")
 
     all_deals: list[dict] = []
     weekends = list(next_weekends(WEEKENDS_AHEAD))
     print(
         f"Scanning {len(weekends)} weekends from {weekends[0][0]} "
-        f"to {weekends[-1][1]} for fares <= EUR {PRICE_CAP_EUR}..."
+        f"to {weekends[-1][1]} for fares <= EUR {PRICE_CAP_EUR} "
+        f"(Ryanair public fare-finder)..."
     )
 
+    total_calls = 0
+    failed_calls = 0
     for origin in ORIGINS:
         for friday, sunday in weekends:
+            total_calls += 1
             label = f"{origin} {friday}->{sunday}"
             try:
                 data = fetch_fares(origin, friday, sunday)
             except requests.RequestException as e:
+                failed_calls += 1
                 print(f"  [warn] {label}: {e}", file=sys.stderr)
                 continue
 
-            items = data.get("data") or []
+            fares = data.get("fares") or []
             kept = 0
-            for item in items:
-                deal = normalise_fare(item, origin)
+            for fare in fares:
+                deal = normalise_fare(fare, origin)
                 if deal is None:
                     continue
                 if deal["effective_price_eur"] <= PRICE_CAP_EUR:
                     all_deals.append(deal)
                     kept += 1
-            print(f"  {label}: {len(items)} results, {kept} under cap")
-            # Be polite to the free tier.
-            time.sleep(0.4)
+            print(f"  {label}: {len(fares)} fares, {kept} under cap")
+            # Be polite to the public endpoint.
+            time.sleep(0.3)
+
+    # If Ryanair was totally unreachable (every call failed), fall back
+    # to the route-catalogue so the dashboard still has *something* to
+    # render instead of an empty deals.json.
+    if total_calls > 0 and failed_calls == total_calls:
+        print(
+            f"\nAll {total_calls} Ryanair calls failed -- falling back to prospects mode.",
+            file=sys.stderr,
+        )
+        return write_prospects_mode("Ryanair unreachable")
 
     # Dedupe on (origin, destination, outbound date) keeping the cheapest.
     dedup: dict[tuple[str, str, str], dict] = {}
@@ -434,7 +449,7 @@ def main() -> int:
         "origins": ORIGINS,
         "weekends_scanned": len(weekends),
         "mode": "live",
-        "source": "kiwi-tequila",
+        "source": "ryanair-farfnd",
         "deals": deals,
     }
 

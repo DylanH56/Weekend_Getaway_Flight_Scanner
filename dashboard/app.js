@@ -176,7 +176,7 @@ async function main() {
       `<b>Prospects mode</b> &middot; ` +
       `<b>${payload.deals.length}</b> route/weekend combos over ${payload.weekends_scanned} weekends &middot; ` +
       `no live prices or time filter &mdash; click through to check &middot; ` +
-      `set <code>KIWI_API_KEY</code> for auto-filtering under &euro;${payload.price_cap_eur} over ~6 months`;
+      `run <code>python scanner.py</code> for real Ryanair fares (no API key needed)`;
   } else {
     metaEl.innerHTML =
       `Last scanned <b>${generated}</b> &middot; ` +

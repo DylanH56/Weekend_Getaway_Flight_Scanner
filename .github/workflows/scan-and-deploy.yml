@@ -3,25 +3,22 @@
 # Triggers on a 6-hourly cron, on pushes to main that touch the scanner
 # or dashboard, and on manual dispatch. Each run:
 #   1. Installs Python deps.
-#   2. Runs scanner.py. If KIWI_API_KEY secret is set, it fetches real
-#      fares from Kiwi Tequila and writes live deals.json. Without the
-#      secret it falls back to prospects mode (route catalogue, no
-#      prices) -- so the workflow still produces something useful.
+#   2. Runs scanner.py. It hits Ryanair's public fare-finder endpoint
+#      (no API key, no signup). If every Ryanair call fails, it falls
+#      back to the route-catalogue prospects mode so the workflow
+#      still produces something useful.
 #   3. Commits the updated deals.json back to main (only if it actually
 #      changed, and with [skip ci] so this doesn't loop).
 #   4. Publishes the `dashboard/` folder to GitHub Pages.
 #
 # One-time setup required from you (can't be done from code):
-#   A. Settings -> Secrets and variables -> Actions -> New repository
-#      secret named KIWI_API_KEY, value = your Tequila API key.
-#      Get one at https://tequila.kiwi.com (free, no credit card).
-#   B. Settings -> Pages -> Source: "GitHub Actions".
-#   C. Merge this branch to main (or the workflow never fires on schedule).
-#   D. Actions tab -> "Scan flights and deploy dashboard" -> Run workflow
+#   A. Settings -> Pages -> Source: "GitHub Actions".
+#   B. Merge this branch to main (or the workflow never fires on schedule).
+#   C. Actions tab -> "Scan flights and deploy dashboard" -> Run workflow
 #      to trigger the first run immediately instead of waiting for cron.
 #
 # After that it runs itself. The Pages URL appears on the workflow run
-# summary -- bookmark it.
+# summary -- bookmark it. NO API KEYS OR SECRETS NEEDED.
 
 name: Scan flights and deploy dashboard
 
@@ -73,8 +70,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run scanner
-        env:
-          KIWI_API_KEY: ${{ secrets.KIWI_API_KEY }}
         run: python scanner.py
 
       - name: Commit refreshed deals.json (if changed)
