@@ -1377,7 +1377,7 @@ def _run() -> int:
                         if len(dump) > 3000:
                             dump = dump[:3000] + "\n  ...(truncated)"
                         print(
-                            f"\n--- sample raw fare from {source_name} / {origin} {friday}->{sunday} ---\n"
+                            f"\n--- sample raw fare from {source_name} / {origin} {out_date}->{in_date} ---\n"
                             f"{dump}\n--- end sample ---\n",
                             file=sys.stderr,
                         )
