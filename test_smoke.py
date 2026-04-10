@@ -410,6 +410,42 @@ def test_source_registry() -> None:
         assert_eq(f"{src['name']} has normalise", callable(src.get("normalise")), True)
 
 
+def test_history_annotation() -> None:
+    print("\n=== history.annotate_deals + update_history_file ===")
+    import history
+    import datetime as dt
+
+    # Use a fake "now" for deterministic timestamps in assertions.
+    t0 = dt.datetime(2026, 5, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
+    t1 = t0 + dt.timedelta(days=1)
+    t2 = t0 + dt.timedelta(days=2)
+
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "history.json"
+
+        # Scan 1: fresh route, FAO at 60. Should be trivially lowest.
+        deal_1 = make_deal("SNN", "FAO", "Faro", "Portugal", 60.0)
+        history.update_history_file(path, [deal_1], now=t0)
+        assert_eq("first sighting is lowest_ever", deal_1["is_lowest_ever"], True)
+        assert_eq("first sighting has no delta", deal_1["price_delta_eur"], None)
+
+        # Scan 2: price drops to 45. Should detect the drop AND flag
+        # as new lowest-ever.
+        deal_2 = make_deal("SNN", "FAO", "Faro", "Portugal", 45.0)
+        history.update_history_file(path, [deal_2], now=t1)
+        assert_eq("price drop detected", deal_2["price_delta_eur"], -15.0)
+        assert_eq("new low flagged as lowest_ever", deal_2["is_lowest_ever"], True)
+        assert_eq("last_seen is previous price", deal_2["last_seen_eur"], 60.0)
+
+        # Scan 3: price rises to 55. Not lowest ever (45 still holds),
+        # delta is +10 relative to last scan.
+        deal_3 = make_deal("SNN", "FAO", "Faro", "Portugal", 55.0)
+        history.update_history_file(path, [deal_3], now=t2)
+        assert_eq("rise detected in delta", deal_3["price_delta_eur"], 10.0)
+        assert_eq("rise is NOT lowest_ever", deal_3["is_lowest_ever"], False)
+        assert_eq("lowest_ever_eur remembered", deal_3["lowest_ever_eur"], 45.0)
+
+
 def test_weekend_windows() -> None:
     print("\n=== scanner.next_weekend_windows ===")
     # 2 base weekends across 4 windows = 8 yielded tuples
@@ -554,6 +590,7 @@ def main() -> int:
     test_scanner_normalise()
     test_aer_lingus_normalise()
     test_source_registry()
+    test_history_annotation()
     test_weekend_windows()
     test_send_test_notification()
     test_fetch_fares_uses_http_get_seam()

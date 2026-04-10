@@ -258,17 +258,118 @@ def notify_if_configured(previous_path: Path, new_deals: list[dict]) -> None:
         return
 
     newly = find_newly_alertable(old_deals, new_deals, alert_cap)
-    if not newly:
+
+    # Also find any deal flagged as a lowest-ever price, regardless of
+    # cap. These are stronger signals than "newly under EUR 80" -- a
+    # route hitting its all-time low deserves a ping even if the
+    # price is EUR 90. Uses the `is_lowest_ever` field that
+    # history.annotate_deals added. We exclude anything already in
+    # `newly` (dedup by route key) to avoid double-notifying.
+    newly_keys = {_key(d) for d in newly}
+    lowest_ever: list[dict] = []
+    # Skip the lowest-ever alert on the very first run where deals
+    # don't have a lowest_ever timestamp yet (everything would be
+    # trivially "lowest").
+    for d in new_deals:
+        if not d.get("is_lowest_ever"):
+            continue
+        if d.get("lowest_ever_at") is None:
+            continue  # first sighting, not a meaningful "new low"
+        if _key(d) in newly_keys:
+            continue
+        lowest_ever.append(d)
+
+    if not newly and not lowest_ever:
         print(
             f"  [notify] no newly-alertable deals <= EUR {alert_cap:.0f} "
+            f"and no new lowest-ever prices "
             f"(compared against {len(old_deals)} prior deals)"
         )
         return
 
-    # Cheapest first in the notification body.
-    newly.sort(key=lambda d: d.get("effective_price_eur") or 9999)
+    # Cheapest first in the notification body, newly-alertable before
+    # lowest-ever so the regular cap stays prominent.
+    newly.sort(key=lambda d: _price(d) or 9999)
+    lowest_ever.sort(key=lambda d: _price(d) or 9999)
 
-    if discord:
-        _notify_discord(discord, newly, alert_cap)
-    if ntfy:
-        _notify_ntfy(ntfy, newly, alert_cap)
+    if newly:
+        if discord:
+            _notify_discord(discord, newly, alert_cap)
+        if ntfy:
+            _notify_ntfy(ntfy, newly, alert_cap)
+        print(
+            f"  [notify] posted {len(newly)} newly-alertable deal(s) "
+            f"<= EUR {alert_cap:.0f}"
+        )
+
+    if lowest_ever:
+        # Reuse the same channels but with a distinct title so the
+        # user can tell it's a history-based alert, not a cap one.
+        if discord:
+            _notify_discord_lowest_ever(discord, lowest_ever)
+        if ntfy:
+            _notify_ntfy_lowest_ever(ntfy, lowest_ever)
+        print(f"  [notify] posted {len(lowest_ever)} lowest-ever alert(s)")
+
+
+# ---------- Lowest-ever variants ----------
+def _notify_discord_lowest_ever(webhook_url: str, deals: list[dict]) -> None:
+    """Post a cheapest-ever Discord message with a distinct title."""
+    batch = deals[:MAX_NOTIFY_ITEMS]
+    embeds: list[dict] = []
+    for d in batch:
+        price = _price(d)
+        if price is None:
+            continue
+        city = d.get("destination_city") or d.get("destination_iata", "?")
+        country = d.get("destination_country", "")
+        origin = d.get("origin", "?")
+        lowest_at = d.get("lowest_ever_at", "")
+        embeds.append({
+            "title": f"\U0001F525 \u20AC{price:.0f}  |  {city}, {country}  -- LOWEST EVER",
+            "description": (
+                f"**{origin}** \u2192 {d.get('destination_iata', '')}  "
+                f"|  {_date_range(d)}  |  previous low: {lowest_at[:10] if lowest_at else 'n/a'}"
+            ),
+            "color": 0xF97316,  # orange for cheapest-ever
+            "fields": [
+                {
+                    "name": "Book",
+                    "value": (
+                        f"[Google Flights]({d.get('google_flights_url', '')}) "
+                        f"\u00b7 [Skyscanner]({d.get('skyscanner_url', '')})"
+                    ),
+                    "inline": False,
+                },
+            ],
+        })
+    if not embeds:
+        return
+    body = {
+        "username": "Weekend Getaway Scanner",
+        "content": f"\U0001F525 **{len(deals)} route(s) just hit their lowest price**",
+        "embeds": embeds,
+    }
+    try:
+        r = requests.post(webhook_url, json=body, timeout=15)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        print(f"  [notify] Discord lowest-ever failed: {e}", file=sys.stderr)
+
+
+def _notify_ntfy_lowest_ever(topic_url: str, deals: list[dict]) -> None:
+    title = f"\U0001F525 {len(deals)} route(s) at lowest-ever price"
+    lines = [_one_liner(d) for d in deals[:MAX_NOTIFY_ITEMS]]
+    body = "\n".join(lines).encode("utf-8")
+    headers = {
+        "Title": title,
+        "Priority": "max",
+        "Tags": "fire,airplane",
+    }
+    click_url = (deals[0].get("google_flights_url") or "") if deals else ""
+    if click_url:
+        headers["Click"] = click_url
+    try:
+        requests.post(topic_url, data=body, headers=headers, timeout=15).raise_for_status()
+    except requests.RequestException as e:
+        print(f"  [notify] ntfy lowest-ever failed: {e}", file=sys.stderr)

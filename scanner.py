@@ -155,6 +155,11 @@ OUTPUT_PATH = Path(__file__).parent / "dashboard" / "deals.json"
 # so the branch itself carries a diagnostic trace even when we can't get
 # at the GitHub Actions step log. Small enough to commit on every run.
 LOG_PATH = Path(__file__).parent / "dashboard" / "last_scan_log.txt"
+# Rolling price history, appended on every scan and pruned to the
+# retention window defined in history.py. Used to annotate each deal
+# with lowest_ever_eur / price_delta_eur and to fire "cheapest ever"
+# Discord alerts.
+HISTORY_PATH = Path(__file__).parent / "dashboard" / "history.json"
 
 # Force prospects-mode fallback even when Ryanair would be reachable.
 # Useful for offline/sandbox runs.
@@ -1284,6 +1289,25 @@ def _run() -> int:
         ],
         "deals": deals,
     }
+
+    # Annotate each deal with price-history fields (lowest_ever_eur,
+    # price_delta_eur, is_lowest_ever) BEFORE we notify or write, so
+    # the notifier can see is_lowest_ever and the dashboard can
+    # render the "cheapest ever" badge.
+    try:
+        from history import update_history_file
+        update_history_file(HISTORY_PATH, deals)
+        lowest_ever_count = sum(1 for d in deals if d.get("is_lowest_ever"))
+        price_drops = [
+            d for d in deals
+            if d.get("price_delta_eur") is not None and d["price_delta_eur"] < 0
+        ]
+        print(
+            f"Price history: {lowest_ever_count} at-or-below lowest ever, "
+            f"{len(price_drops)} price drops since last scan."
+        )
+    except Exception as e:
+        print(f"  [history] error: {e}", file=sys.stderr)
 
     # Notify BEFORE we overwrite deals.json, so the notifier can compare
     # the new scan against the old file on disk. Wrapped in a bare try

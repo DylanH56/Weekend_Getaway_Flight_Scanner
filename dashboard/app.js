@@ -105,6 +105,7 @@ function initMap() {
 function renderDealCard(deal, idx) {
   const li = document.createElement("li");
   li.className = "deal";
+  if (deal.is_lowest_ever) li.classList.add("lowest-ever");
   li.dataset.idx = idx;
 
   const flightPrice = deal.flight_price_eur != null
@@ -124,6 +125,21 @@ function renderDealCard(deal, idx) {
     : (deal.origin === "SNN"
         ? "live price via link"
         : `+&euro;${bus.toFixed(0)} Limerick bus (not incl.)`);
+
+  // Price history annotations from history.py: is_lowest_ever,
+  // price_delta_eur, last_seen_eur. Show a small trend chip when
+  // any of them is meaningful.
+  let trendHtml = "";
+  if (deal.is_lowest_ever && deal.lowest_ever_at) {
+    trendHtml = `<span class="trend lowest-ever">&#128293; lowest ever</span>`;
+  } else if (typeof deal.price_delta_eur === "number" && deal.price_delta_eur !== 0) {
+    const delta = deal.price_delta_eur;
+    if (delta < 0) {
+      trendHtml = `<span class="trend down">&darr; &euro;${Math.abs(delta).toFixed(0)}</span>`;
+    } else {
+      trendHtml = `<span class="trend up">&uarr; &euro;${delta.toFixed(0)}</span>`;
+    }
+  }
 
   const hasTimes = !!deal.outbound_arrival;
   const timesHtml = hasTimes
@@ -149,6 +165,7 @@ function renderDealCard(deal, idx) {
       <div class="price-block">
         <div class="price">${priceDisplay}</div>
         <div class="price-note">${priceNote}</div>
+        ${trendHtml}
       </div>
     </div>
     <div class="meta-row">
