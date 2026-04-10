@@ -7,7 +7,152 @@ const ORIGIN_COLOR = {
   BHX: { stroke: "#fb923c", fill: "#7c2d12" },  // amber/orange
 };
 
+// Country -> region mapping. Used by the region-chip filter so users
+// can click "Iberia" to see Spain/Portugal or "Italy" for just Italy.
+// Any country not in the map lands in "Other".
+const REGION_MAP = {
+  "United Kingdom": "UK & Ireland",
+  "Ireland": "UK & Ireland",
+  "Spain": "Iberia",
+  "Portugal": "Iberia",
+  "France": "France & Benelux",
+  "Belgium": "France & Benelux",
+  "Netherlands": "France & Benelux",
+  "Luxembourg": "France & Benelux",
+  "Germany": "Germany & Central Europe",
+  "Austria": "Germany & Central Europe",
+  "Switzerland": "Germany & Central Europe",
+  "Czechia": "Germany & Central Europe",
+  "Czech Republic": "Germany & Central Europe",
+  "Slovakia": "Germany & Central Europe",
+  "Hungary": "Germany & Central Europe",
+  "Poland": "Germany & Central Europe",
+  "Italy": "Italy",
+  "Malta": "Italy",
+  "Denmark": "Scandinavia",
+  "Sweden": "Scandinavia",
+  "Norway": "Scandinavia",
+  "Finland": "Scandinavia",
+  "Iceland": "Scandinavia",
+  "Greece": "Mediterranean",
+  "Croatia": "Mediterranean",
+  "Cyprus": "Mediterranean",
+  "Slovenia": "Mediterranean",
+  "Bosnia and Herzegovina": "Balkans",
+  "Serbia": "Balkans",
+  "Montenegro": "Balkans",
+  "Albania": "Balkans",
+  "Macedonia": "Balkans",
+  "North Macedonia": "Balkans",
+  "Kosovo": "Balkans",
+  "Romania": "Balkans",
+  "Bulgaria": "Balkans",
+  "Turkey": "Balkans",
+  "Estonia": "Baltics",
+  "Latvia": "Baltics",
+  "Lithuania": "Baltics",
+  "Morocco": "North Africa",
+  "Israel": "Other",
+};
+function regionOf(country) {
+  return REGION_MAP[country] || "Other";
+}
+
+// Display order for region chips -- popular regions first so the
+// sidebar doesn't jump around as users click through.
+const REGION_ORDER = [
+  "UK & Ireland",
+  "Iberia",
+  "Italy",
+  "France & Benelux",
+  "Germany & Central Europe",
+  "Mediterranean",
+  "Scandinavia",
+  "Balkans",
+  "Baltics",
+  "North Africa",
+  "Other",
+];
+
 const $ = (id) => document.getElementById(id);
+
+// Toast helper: fade in, hold for ~1.8s, fade out. Used for "Copied
+// link to clipboard" and any future transient confirmations.
+let toastTimeout = null;
+function showToast(message) {
+  const el = $("toast");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.add("show");
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => el.classList.remove("show"), 1800);
+}
+
+// Compute flight duration from ISO timestamps. Returns "2h 15m" or
+// null if inputs are missing. The scanner already emits these in
+// local-airport time so the subtraction lines up cleanly.
+function flightDurationLabel(depIso, arrIso) {
+  if (!depIso || !arrIso) return null;
+  const dep = new Date(depIso);
+  const arr = new Date(arrIso);
+  if (isNaN(dep) || isNaN(arr)) return null;
+  let mins = Math.round((arr - dep) / 60000);
+  if (mins < 0) return null;  // crossed midnight weirdness -- skip
+  // Clamp obviously-wrong values (over 24h) to avoid nonsense output
+  // if the scanner ever emits bogus timestamps.
+  if (mins > 24 * 60) return null;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+// Build a Booking.com search URL pre-filled with destination city
+// and the weekend's check-in / check-out dates (derived from the
+// flight outbound/inbound departure dates). Booking.com is happy to
+// receive a free-text city name in the `ss` param.
+function bookingUrl(deal) {
+  const city = deal.destination_city || deal.destination_iata;
+  const checkin = (deal.outbound_departure || "").slice(0, 10);
+  const checkout = (deal.inbound_departure || "").slice(0, 10);
+  if (!city || !checkin || !checkout) return null;
+  const params = new URLSearchParams({
+    ss: city,
+    checkin: checkin,
+    checkout: checkout,
+    group_adults: "2",
+    no_rooms: "1",
+    group_children: "0",
+  });
+  return `https://www.booking.com/searchresults.html?${params.toString()}`;
+}
+
+// Airbnb search URL for the same window. Airbnb uses different query
+// param names than Booking.com but the principle is the same.
+function airbnbUrl(deal) {
+  const city = deal.destination_city || deal.destination_iata;
+  const country = deal.destination_country || "";
+  const checkin = (deal.outbound_departure || "").slice(0, 10);
+  const checkout = (deal.inbound_departure || "").slice(0, 10);
+  if (!city || !checkin || !checkout) return null;
+  const query = country ? `${city}, ${country}` : city;
+  const params = new URLSearchParams({
+    query,
+    checkin,
+    checkout,
+    adults: "2",
+  });
+  return `https://www.airbnb.com/s/${encodeURIComponent(query)}/homes?${params.toString()}`;
+}
+
+// Google search URL for "things to do in <city> this weekend". Dead
+// simple, opens in a new tab, gives the user a jumping-off point.
+function activitiesUrl(deal) {
+  const city = deal.destination_city || deal.destination_iata;
+  if (!city) return null;
+  return `https://www.google.com/search?q=${encodeURIComponent("things to do in " + city + " this weekend")}`;
+}
 
 function fmtDateTime(iso) {
   const d = new Date(iso);
@@ -322,6 +467,15 @@ function renderDealCard(deal, idx) {
     ? `<div class="warn">&#9888; Filter for evening departures on the booking site &mdash; the link can't do it for you.</div>`
     : "";
 
+  // Flight duration (outbound leg). Pure client-side -- the scanner
+  // already emits ISO timestamps so we just subtract them here.
+  const outDuration = flightDurationLabel(deal.outbound_departure, deal.outbound_arrival);
+
+  // Hotel + activity links pre-filled with the weekend dates.
+  const hotelHref = bookingUrl(deal);
+  const stayHref = airbnbUrl(deal);
+  const activitiesHref = activitiesUrl(deal);
+
   li.innerHTML = `
     <div class="top">
       <div>
@@ -344,8 +498,13 @@ function renderDealCard(deal, idx) {
     <div class="times">${timesHtml}</div>
     ${warnHtml}
     <div class="extras-row">
+      ${outDuration ? `<span class="extra duration" title="Outbound flight duration">&#x2708; ${outDuration}</span>` : ""}
       ${co2Kg != null ? `<span class="extra" title="Approx per-passenger CO2 for the round trip">&#x1F33F; ~${co2Kg} kg CO&#8322;</span>` : ""}
-      <a class="extra ical" href="#" data-action="ical">&#x1F4C5; Add to calendar</a>
+      <a class="extra ical" href="#" data-action="ical">&#x1F4C5; Calendar</a>
+      ${hotelHref ? `<a class="extra hotels" href="${hotelHref}" target="_blank" rel="noopener">&#x1F3E8; Hotels</a>` : ""}
+      ${stayHref ? `<a class="extra hotels" href="${stayHref}" target="_blank" rel="noopener">&#x1F3E0; Airbnb</a>` : ""}
+      ${activitiesHref ? `<a class="extra activities" href="${activitiesHref}" target="_blank" rel="noopener">&#x1F3DB; Things to do</a>` : ""}
+      <a class="extra share" href="#" data-action="share">&#x1F517; Share</a>
     </div>
     <div class="book-row">
       <a class="book book-google" href="${deal.google_flights_url}" target="_blank" rel="noopener">Google Flights &rarr;</a>
@@ -361,6 +520,35 @@ function renderDealCard(deal, idx) {
       downloadIcs(deal);
     });
   }
+  // Share click handler: builds a deep-link URL and copies it.
+  const shareLink = li.querySelector('a[data-action="share"]');
+  if (shareLink) {
+    shareLink.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const url = new URL(location.href);
+      url.searchParams.set("deal", dealKey(deal));
+      const href = url.toString();
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(href);
+          showToast("Link copied to clipboard");
+        } else {
+          // Fallback for older browsers / non-HTTPS contexts: show
+          // the URL in a prompt so the user can copy it manually.
+          window.prompt("Copy this link:", href);
+        }
+      } catch (err) {
+        console.warn("Share copy failed:", err);
+        window.prompt("Copy this link:", href);
+      }
+    });
+  }
+  // Prevent the card's outer click handler (which pans the map) from
+  // firing when the user clicks a hotels/airbnb/activities link.
+  li.querySelectorAll(".extras-row a").forEach((a) => {
+    a.addEventListener("click", (e) => e.stopPropagation());
+  });
   return li;
 }
 
@@ -438,6 +626,17 @@ async function main() {
   // behaviour). User toggles chips to enable longer windows.
   const enabledWindows = new Set(["fri_sun"]);
 
+  // Active region filter -- null means "show all regions". Set by
+  // clicking a chip in #region-chips.
+  let activeRegion = null;
+
+  // Search query from the #search-box input. Normalized to lowercase
+  // once at read-time; applied against city, country, and IATA.
+  function currentSearchQuery() {
+    const el = $("search-box");
+    return el ? (el.value || "").trim().toLowerCase() : "";
+  }
+
   function currentFilters() {
     const sliderEl = $("price-max");
     const maxPrice = sliderEl ? parseInt(sliderEl.value, 10) : 150;
@@ -449,6 +648,8 @@ async function main() {
       maxPrice: isFinite(maxPrice) ? maxPrice : 150,
       sortMode: $("sort").value,
       windows: enabledWindows,
+      region: activeRegion,
+      search: currentSearchQuery(),
     };
   }
 
@@ -463,9 +664,185 @@ async function main() {
       // multi-window field (back-compat with old deals.json).
       const win = d.weekend_window || "fri_sun";
       if (f.windows.size > 0 && !f.windows.has(win)) return false;
+      // Region filter: null = all regions.
+      if (f.region && regionOf(d.destination_country) !== f.region) return false;
+      // Text search: match against city, country, or IATA (all lower-cased).
+      if (f.search) {
+        const hay = (
+          (d.destination_city || "") + " " +
+          (d.destination_country || "") + " " +
+          (d.destination_iata || "")
+        ).toLowerCase();
+        if (!hay.includes(f.search)) return false;
+      }
       return true;
     });
   }
+
+  // Compute the set of regions present in the current payload +
+  // count deals per region, respecting all OTHER filters (origin,
+  // price, windows, search) but ignoring the region filter itself
+  // so toggling a chip always reflects its true deal count.
+  function computeRegionCounts() {
+    const f = currentFilters();
+    const noRegionFilter = { ...f, region: null };
+    const candidates = applyFilters(payload.deals, noRegionFilter);
+    const counts = {};
+    for (const d of candidates) {
+      const r = regionOf(d.destination_country);
+      counts[r] = (counts[r] || 0) + 1;
+    }
+    return counts;
+  }
+
+  // Render region chips in REGION_ORDER, skipping regions that have
+  // zero deals under the current non-region filters.
+  function renderRegionChips() {
+    const container = $("region-chips");
+    if (!container) return;
+    const counts = computeRegionCounts();
+    container.innerHTML = "";
+    // "All" chip first -- clicking it clears the region filter.
+    const allChip = document.createElement("div");
+    const totalCount = Object.values(counts).reduce((a, b) => a + b, 0);
+    allChip.className = "region-chip" + (activeRegion === null ? " active" : "");
+    allChip.innerHTML = `All <span class="count">${totalCount}</span>`;
+    allChip.addEventListener("click", () => {
+      activeRegion = null;
+      render();
+      syncUrlState();
+    });
+    container.appendChild(allChip);
+    // Then one chip per populated region, in display order.
+    for (const region of REGION_ORDER) {
+      const n = counts[region] || 0;
+      if (n === 0) continue;
+      const chip = document.createElement("div");
+      chip.className = "region-chip" + (activeRegion === region ? " active" : "");
+      chip.innerHTML = `${region} <span class="count">${n}</span>`;
+      chip.addEventListener("click", () => {
+        // Click the active chip again to deselect; otherwise activate it.
+        activeRegion = activeRegion === region ? null : region;
+        render();
+        syncUrlState();
+      });
+      container.appendChild(chip);
+    }
+  }
+
+  // --- URL state persistence -----------------------------------------
+  // Reflects filter state in the URL querystring so bookmarks and
+  // "share this view" links work. Writes via history.replaceState
+  // so we don't pollute the browser history on every filter change.
+  function syncUrlState() {
+    const f = currentFilters();
+    const params = new URLSearchParams();
+
+    // Origin checkboxes: only serialise if NOT all three are on.
+    const origins = [];
+    if (f.showSNN) origins.push("SNN");
+    if (f.showDUB) origins.push("DUB");
+    if (f.showBHX) origins.push("BHX");
+    if (origins.length < 3) params.set("origin", origins.join(","));
+
+    // Price cap: only serialise if not at the max slider value.
+    const slider = $("price-max");
+    const defaultMax = slider ? parseInt(slider.max, 10) : 150;
+    if (f.maxPrice !== defaultMax) params.set("max", String(f.maxPrice));
+
+    // Weekend windows: serialise if not just the default fri_sun.
+    const wins = Array.from(f.windows);
+    if (wins.length !== 1 || wins[0] !== "fri_sun") {
+      params.set("win", wins.join(","));
+    }
+
+    // Region: only if set.
+    if (f.region) params.set("region", f.region);
+
+    // Search query: only if non-empty.
+    if (f.search) params.set("q", f.search);
+
+    // Selected destination pin.
+    if (selectedDestination) params.set("dest", selectedDestination);
+
+    // Sort mode: only if not default.
+    if (f.sortMode && f.sortMode !== "price") params.set("sort", f.sortMode);
+
+    // Currency: only if not EUR.
+    if (activeCurrency && activeCurrency !== "EUR") params.set("cur", activeCurrency);
+
+    const qs = params.toString();
+    const newUrl = qs
+      ? `${location.pathname}?${qs}${location.hash}`
+      : `${location.pathname}${location.hash}`;
+    try {
+      history.replaceState(null, "", newUrl);
+    } catch (e) {
+      // Some browsers block replaceState in certain contexts (e.g.
+      // file:// URLs). Non-fatal -- filters still work.
+    }
+  }
+
+  // Read URL params once at page load and apply them to the initial
+  // filter state. Called BEFORE the first render() so the dashboard
+  // comes up with the bookmarked view already applied.
+  function applyUrlState() {
+    const params = new URLSearchParams(location.search);
+
+    const originParam = params.get("origin");
+    if (originParam) {
+      const set = new Set(originParam.split(",").map((s) => s.trim().toUpperCase()));
+      const snn = $("filter-snn"); if (snn) snn.checked = set.has("SNN");
+      const dub = $("filter-dub"); if (dub) dub.checked = set.has("DUB");
+      const bhx = $("filter-bhx"); if (bhx) bhx.checked = set.has("BHX");
+    }
+
+    const maxParam = parseInt(params.get("max") || "", 10);
+    if (isFinite(maxParam) && maxParam > 0) {
+      const slider = $("price-max");
+      const label = $("price-max-label");
+      if (slider) slider.value = String(maxParam);
+      if (label) label.innerHTML = `&euro;${maxParam}`;
+    }
+
+    const winParam = params.get("win");
+    if (winParam) {
+      enabledWindows.clear();
+      winParam.split(",").map((s) => s.trim()).filter(Boolean).forEach((w) => enabledWindows.add(w));
+      // Guard against empty set -- fall back to default.
+      if (enabledWindows.size === 0) enabledWindows.add("fri_sun");
+    }
+
+    const regionParam = params.get("region");
+    if (regionParam && REGION_ORDER.includes(regionParam)) {
+      activeRegion = regionParam;
+    }
+
+    const qParam = params.get("q");
+    if (qParam) {
+      const box = $("search-box");
+      if (box) box.value = qParam;
+    }
+
+    const destParam = params.get("dest");
+    if (destParam) {
+      selectedDestination = destParam;
+    }
+
+    const sortParam = params.get("sort");
+    if (sortParam) {
+      const sel = $("sort");
+      if (sel) sel.value = sortParam;
+    }
+
+    const curParam = params.get("cur");
+    if (curParam && ["EUR", "GBP", "USD"].includes(curParam)) {
+      activeCurrency = curParam;
+      const sel = $("currency");
+      if (sel) sel.value = curParam;
+    }
+  }
+  // --- end URL state persistence -----------------------------------
 
   // Render the chip row from payload.weekend_windows. Each chip shows
   // the window label + a live count of deals that match (respecting
@@ -607,7 +984,42 @@ async function main() {
     }
 
     if (sorted.length === 0) {
-      listEl.innerHTML = '<p class="empty">No deals match the current filters.</p>';
+      // Compute a helpful empty-state: how many deals exist in total
+      // vs. how many filters are currently narrowing them down. If
+      // the user hasn't changed any filters there's nothing to reset,
+      // so just show the basic message.
+      const f = currentFilters();
+      const origins = [f.showSNN, f.showDUB, f.showBHX].filter(Boolean).length;
+      const hiddenCount = payload.deals.length;
+      const hints = [];
+      if (f.maxPrice < 150) hints.push(`raising the price slider (currently &euro;${f.maxPrice})`);
+      if (origins < 3) hints.push("enabling more origin airports");
+      if (f.region) hints.push(`clearing the <b>${f.region}</b> region filter`);
+      if (f.search) hints.push(`clearing the search for <b>"${f.search.replace(/</g, "&lt;")}"</b>`);
+      if (f.windows.size === 1 && !f.windows.has("fri_sun")) hints.push("enabling more weekend windows");
+      if (selectedDestination) hints.push("unpinning the selected destination");
+
+      const showReset = hints.length > 0;
+      const hintHtml = showReset
+        ? `Try ${hints.slice(0, 2).join(" or ")}.`
+        : "The scanner hasn&rsquo;t found any matching deals yet.";
+
+      listEl.innerHTML = `
+        <div class="empty-state">
+          <span class="empty-icon">&#x1F50D;</span>
+          <div class="empty-title">No deals match your filters</div>
+          <div class="empty-hint">${hintHtml}${hiddenCount > 0 ? ` (${hiddenCount} total deals in payload)` : ""}</div>
+          ${showReset ? '<button class="reset-filters-btn" id="reset-filters">Reset all filters</button>' : ""}
+        </div>
+      `;
+      const resetBtn = $("reset-filters");
+      if (resetBtn) {
+        resetBtn.addEventListener("click", () => {
+          resetFiltersToDefaults();
+          render();
+          syncUrlState();
+        });
+      }
       return;
     }
 
@@ -631,13 +1043,33 @@ async function main() {
     });
   }
 
+  function resetFiltersToDefaults() {
+    // Restore every filter element to its default state. Called by
+    // the empty-state "Reset all filters" button.
+    const snn = $("filter-snn"); if (snn) snn.checked = true;
+    const dub = $("filter-dub"); if (dub) dub.checked = true;
+    const bhx = $("filter-bhx"); if (bhx) bhx.checked = true;
+    const slider = $("price-max");
+    const label = $("price-max-label");
+    if (slider) slider.value = "150";
+    if (label) label.innerHTML = "&euro;150";
+    const searchBox = $("search-box");
+    if (searchBox) searchBox.value = "";
+    enabledWindows.clear();
+    enabledWindows.add("fri_sun");
+    activeRegion = null;
+    selectedDestination = null;
+  }
+
   function render() {
     const f = currentFilters();
     const filtered = applyFilters(payload.deals, f);
     updateMeta(filtered.length, payload.deals.length);
     renderWindowChips();
+    renderRegionChips();
     renderMapMarkers(filtered);
     renderSidebar(filtered, f.sortMode);
+    syncUrlState();
   }
 
   // Slider label live-updates as you drag; map+sidebar re-render on every change.
@@ -668,6 +1100,26 @@ async function main() {
     bhxCheckbox.addEventListener("change", render);
   }
   $("sort").addEventListener("change", render);
+
+  // Search box: debounced so rapid typing doesn't cause 20 re-renders
+  // per second on large payloads. 150ms feels responsive.
+  const searchBox = $("search-box");
+  if (searchBox) {
+    let searchTimer = null;
+    searchBox.addEventListener("input", () => {
+      if (searchTimer) clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => {
+        render();
+      }, 150);
+    });
+    // Escape key clears the box.
+    searchBox.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && searchBox.value) {
+        searchBox.value = "";
+        render();
+      }
+    });
+  }
   const currencyEl = $("currency");
   if (currencyEl) {
     currencyEl.addEventListener("change", () => {
@@ -819,7 +1271,31 @@ async function main() {
     if (!document.hidden) pollForUpdates();
   });
 
+  // Apply URL-state BEFORE the first render so the dashboard comes up
+  // with the bookmarked filters already in place. Also handles the
+  // ?deal=... deep-link case below.
+  applyUrlState();
+
   render();
+
+  // Deep-link: ?deal=FR|DUB|BCN|fri_sun|2026-05-08T18:00:00 scrolls
+  // to and highlights the matching card on initial load. Done after
+  // render() so the cards exist in the DOM.
+  const dealLinkParam = new URLSearchParams(location.search).get("deal");
+  if (dealLinkParam) {
+    setTimeout(() => {
+      const cards = Array.from(listEl.querySelectorAll(".deal"));
+      const match = cards.find((c) => c.dataset.dealKey === dealLinkParam);
+      if (match) {
+        match.scrollIntoView({ behavior: "smooth", block: "center" });
+        match.classList.add("highlighted");
+        setTimeout(() => match.classList.remove("highlighted"), 4000);
+        showToast("Deal from shared link");
+      } else {
+        console.warn("Shared deal link not found:", dealLinkParam);
+      }
+    }, 100);
+  }
 }
 
 // Register the service worker so the dashboard is installable as a

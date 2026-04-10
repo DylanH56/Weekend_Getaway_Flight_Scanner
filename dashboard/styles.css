@@ -81,6 +81,60 @@ main {
   letter-spacing: 1px;
 }
 
+.search-row {
+  margin: 10px 0 8px;
+}
+.search-row input[type="search"] {
+  width: 100%;
+  padding: 8px 10px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #f1f5f9;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.search-row input[type="search"]:focus {
+  outline: none;
+  border-color: #38bdf8;
+  background: #0b1a2e;
+}
+.search-row input[type="search"]::placeholder {
+  color: #64748b;
+}
+
+.region-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 8px 0 10px;
+}
+.region-chip {
+  background: #1e293b;
+  color: #cbd5e1;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid #334155;
+  user-select: none;
+  transition: background-color .12s, border-color .12s;
+}
+.region-chip:hover {
+  background: #334155;
+}
+.region-chip.active {
+  background: #0ea5e9;
+  color: #0f172a;
+  border-color: #0ea5e9;
+  font-weight: 600;
+}
+.region-chip .count {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: .75;
+}
+
 .filters {
   display: flex;
   gap: 14px;
@@ -526,14 +580,23 @@ main {
   align-items: center;
   gap: 3px;
 }
-.extras-row .extra.ical {
+.extras-row .extra.ical,
+.extras-row .extra.hotels,
+.extras-row .extra.activities,
+.extras-row .extra.share {
   color: #38bdf8;
   text-decoration: none;
   cursor: pointer;
 }
-.extras-row .extra.ical:hover {
+.extras-row .extra.ical:hover,
+.extras-row .extra.hotels:hover,
+.extras-row .extra.activities:hover,
+.extras-row .extra.share:hover {
   color: #7dd3fc;
   text-decoration: underline;
+}
+.extras-row .extra.duration {
+  color: #94a3b8;
 }
 
 .currency-label {
@@ -582,6 +645,67 @@ main {
   padding: 2px 6px;
   border-radius: 4px;
   color: #cbd5e1;
+}
+
+.empty-state {
+  padding: 32px 20px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+.empty-state .empty-icon {
+  font-size: 32px;
+  margin-bottom: 12px;
+  display: block;
+}
+.empty-state .empty-title {
+  font-size: 14px;
+  color: #cbd5e1;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.empty-state .empty-hint {
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+.empty-state .reset-filters-btn {
+  display: inline-block;
+  padding: 8px 16px;
+  background: #0ea5e9;
+  color: #0f172a;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.empty-state .reset-filters-btn:hover {
+  background: #38bdf8;
+}
+
+/* Toast notification (shown briefly when a deal URL is copied). */
+#toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: #0ea5e9;
+  color: #0f172a;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s, transform .2s;
+  z-index: 9999;
+}
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 /* Leaflet popup dark theme */
