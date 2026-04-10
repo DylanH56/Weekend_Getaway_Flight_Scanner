@@ -232,21 +232,32 @@ main {
   font-weight: 600;
 }
 
-.book {
-  display: block;
+.book-row {
+  display: flex;
+  gap: 8px;
   margin-top: 10px;
-  padding: 8px 12px;
-  background: #0284c7;
+}
+
+.book {
+  flex: 1;
+  display: block;
+  padding: 8px 10px;
   color: #fff;
   text-align: center;
   text-decoration: none;
   border-radius: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  transition: background .15s;
+  transition: background .15s, transform .15s;
 }
 
-.book:hover { background: #0369a1; }
+.book:hover { transform: translateY(-1px); }
+
+.book-google { background: #1a73e8; }
+.book-google:hover { background: #1558b0; }
+
+.book-sky { background: #0770e3; background: #00b2d6; }
+.book-sky:hover { background: #008fb0; }
 
 .empty {
   text-align: center;

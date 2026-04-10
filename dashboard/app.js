@@ -114,7 +114,10 @@ function renderDealCard(deal, idx) {
       <div><span class="label">OUT</span> ${fmtDateTime(deal.outbound_departure)} &rarr; ${fmtDateTime(deal.outbound_arrival)} &middot; ${deal.outbound_flight_number || ""}</div>
       <div><span class="label">RET</span> ${fmtDateTime(deal.inbound_departure)} &rarr; ${fmtDateTime(deal.inbound_arrival)} &middot; ${deal.inbound_flight_number || ""}</div>
     </div>
-    <a class="book" href="${deal.booking_url}" target="_blank" rel="noopener">Book on Ryanair &rarr;</a>
+    <div class="book-row">
+      <a class="book book-google" href="${deal.google_flights_url}" target="_blank" rel="noopener">Google Flights &rarr;</a>
+      <a class="book book-sky" href="${deal.skyscanner_url}" target="_blank" rel="noopener">Skyscanner &rarr;</a>
+    </div>
   `;
   return li;
 }
@@ -192,7 +195,9 @@ async function main() {
         <span style="color:#4ade80;font-size:15px;font-weight:700">&euro;${deal.effective_price_eur.toFixed(0)}</span>
         from ${ORIGIN_LABEL[deal.origin]}<br>
         <span style="color:#cbd5e1">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span><br>
-        <a href="${deal.booking_url}" target="_blank" rel="noopener">Book on Ryanair &rarr;</a>
+        <a href="${deal.google_flights_url}" target="_blank" rel="noopener">Google Flights</a>
+        &nbsp;&middot;&nbsp;
+        <a href="${deal.skyscanner_url}" target="_blank" rel="noopener">Skyscanner</a>
       `;
       marker.bindPopup(popupHtml);
 

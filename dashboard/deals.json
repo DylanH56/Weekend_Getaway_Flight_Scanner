@@ -2,9 +2,12 @@
   "generated_at": "2026-04-10T10:00:00+00:00",
   "price_cap_eur": 100.0,
   "bus_return_cost_eur": 30.0,
-  "origins": ["SNN", "DUB"],
+  "origins": [
+    "SNN",
+    "DUB"
+  ],
   "weekends_scanned": 16,
-  "_note": "SAMPLE DATA for first-render. Run `python scanner.py` to replace with live Ryanair fares.",
+  "_note": "SAMPLE DATA for first-render. Set KIWI_API_KEY and run `python scanner.py` to replace with live fares.",
   "deals": [
     {
       "origin": "SNN",
@@ -23,7 +26,8 @@
       "inbound_departure": "2026-04-19T20:10:00",
       "inbound_arrival": "2026-04-19T21:40:00",
       "inbound_flight_number": "FR669",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-04-17&dateIn=2026-04-19&originIata=SNN&destinationIata=STN&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-04-17&tpEndDate=2026-04-19&tpDiscount=0&tpOriginIata=SNN&tpDestinationIata=STN"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+SNN+to+STN+on+2026-04-17+through+2026-04-19",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/snn/stn/260417/260419/"
     },
     {
       "origin": "SNN",
@@ -42,7 +46,8 @@
       "inbound_departure": "2026-04-19T20:30:00",
       "inbound_arrival": "2026-04-19T21:30:00",
       "inbound_flight_number": "FR424",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-04-17&dateIn=2026-04-19&originIata=SNN&destinationIata=MAN&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-04-17&tpEndDate=2026-04-19&tpDiscount=0&tpOriginIata=SNN&tpDestinationIata=MAN"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+SNN+to+MAN+on+2026-04-17+through+2026-04-19",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/snn/man/260417/260419/"
     },
     {
       "origin": "SNN",
@@ -61,7 +66,8 @@
       "inbound_departure": "2026-04-26T18:15:00",
       "inbound_arrival": "2026-04-26T20:30:00",
       "inbound_flight_number": "FR8842",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-04-24&dateIn=2026-04-26&originIata=SNN&destinationIata=KRK&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-04-24&tpEndDate=2026-04-26&tpDiscount=0&tpOriginIata=SNN&tpDestinationIata=KRK"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+SNN+to+KRK+on+2026-04-24+through+2026-04-26",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/snn/krk/260424/260426/"
     },
     {
       "origin": "SNN",
@@ -80,7 +86,8 @@
       "inbound_departure": "2026-04-26T18:55:00",
       "inbound_arrival": "2026-04-26T21:00:00",
       "inbound_flight_number": "FR7122",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-04-24&dateIn=2026-04-26&originIata=SNN&destinationIata=ALC&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-04-24&tpEndDate=2026-04-26&tpDiscount=0&tpOriginIata=SNN&tpDestinationIata=ALC"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+SNN+to+ALC+on+2026-04-24+through+2026-04-26",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/snn/alc/260424/260426/"
     },
     {
       "origin": "SNN",
@@ -99,7 +106,8 @@
       "inbound_departure": "2026-05-03T19:55:00",
       "inbound_arrival": "2026-05-03T21:55:00",
       "inbound_flight_number": "FR2532",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-05-01&dateIn=2026-05-03&originIata=SNN&destinationIata=WRO&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-05-01&tpEndDate=2026-05-03&tpDiscount=0&tpOriginIata=SNN&tpDestinationIata=WRO"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+SNN+to+WRO+on+2026-05-01+through+2026-05-03",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/snn/wro/260501/260503/"
     },
     {
       "origin": "SNN",
@@ -118,7 +126,8 @@
       "inbound_departure": "2026-05-10T19:15:00",
       "inbound_arrival": "2026-05-10T21:10:00",
       "inbound_flight_number": "FR144",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-05-08&dateIn=2026-05-10&originIata=SNN&destinationIata=BER&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-05-08&tpEndDate=2026-05-10&tpDiscount=0&tpOriginIata=SNN&tpDestinationIata=BER"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+SNN+to+BER+on+2026-05-08+through+2026-05-10",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/snn/ber/260508/260510/"
     },
     {
       "origin": "SNN",
@@ -137,7 +146,8 @@
       "inbound_departure": "2026-05-17T17:15:00",
       "inbound_arrival": "2026-05-17T19:40:00",
       "inbound_flight_number": "FR9933",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-05-15&dateIn=2026-05-17&originIata=SNN&destinationIata=AGP&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-05-15&tpEndDate=2026-05-17&tpDiscount=0&tpOriginIata=SNN&tpDestinationIata=AGP"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+SNN+to+AGP+on+2026-05-15+through+2026-05-17",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/snn/agp/260515/260517/"
     },
     {
       "origin": "DUB",
@@ -156,7 +166,8 @@
       "inbound_departure": "2026-05-03T18:05:00",
       "inbound_arrival": "2026-05-03T20:20:00",
       "inbound_flight_number": "FR7022",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-05-01&dateIn=2026-05-03&originIata=DUB&destinationIata=GRO&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-05-01&tpEndDate=2026-05-03&tpDiscount=0&tpOriginIata=DUB&tpDestinationIata=GRO"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+DUB+to+GRO+on+2026-05-01+through+2026-05-03",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/dub/gro/260501/260503/"
     },
     {
       "origin": "DUB",
@@ -175,7 +186,8 @@
       "inbound_departure": "2026-04-26T17:35:00",
       "inbound_arrival": "2026-04-26T19:55:00",
       "inbound_flight_number": "FR9182",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-04-24&dateIn=2026-04-26&originIata=DUB&destinationIata=BUD&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-04-24&tpEndDate=2026-04-26&tpDiscount=0&tpOriginIata=DUB&tpDestinationIata=BUD"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+DUB+to+BUD+on+2026-04-24+through+2026-04-26",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/dub/bud/260424/260426/"
     },
     {
       "origin": "DUB",
@@ -194,7 +206,8 @@
       "inbound_departure": "2026-05-03T16:45:00",
       "inbound_arrival": "2026-05-03T19:40:00",
       "inbound_flight_number": "FR7552",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-05-01&dateIn=2026-05-03&originIata=DUB&destinationIata=FAO&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-05-01&tpEndDate=2026-05-03&tpDiscount=0&tpOriginIata=DUB&tpDestinationIata=FAO"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+DUB+to+FAO+on+2026-05-01+through+2026-05-03",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/dub/fao/260501/260503/"
     },
     {
       "origin": "DUB",
@@ -213,7 +226,8 @@
       "inbound_departure": "2026-05-10T17:30:00",
       "inbound_arrival": "2026-05-10T20:00:00",
       "inbound_flight_number": "FR7752",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-05-08&dateIn=2026-05-10&originIata=DUB&destinationIata=CIA&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-05-08&tpEndDate=2026-05-10&tpDiscount=0&tpOriginIata=DUB&tpDestinationIata=CIA"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+DUB+to+CIA+on+2026-05-08+through+2026-05-10",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/dub/cia/260508/260510/"
     },
     {
       "origin": "DUB",
@@ -232,7 +246,8 @@
       "inbound_departure": "2026-05-10T18:00:00",
       "inbound_arrival": "2026-05-10T20:40:00",
       "inbound_flight_number": "FR6212",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-05-08&dateIn=2026-05-10&originIata=DUB&destinationIata=NAP&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-05-08&tpEndDate=2026-05-10&tpDiscount=0&tpOriginIata=DUB&tpDestinationIata=NAP"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+DUB+to+NAP+on+2026-05-08+through+2026-05-10",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/dub/nap/260508/260510/"
     },
     {
       "origin": "DUB",
@@ -251,7 +266,9 @@
       "inbound_departure": "2026-05-17T17:55:00",
       "inbound_arrival": "2026-05-17T20:05:00",
       "inbound_flight_number": "FR9662",
-      "booking_url": "https://www.ryanair.com/ie/en/trip/flights/select?adults=1&teens=0&children=0&infants=0&dateOut=2026-05-15&dateIn=2026-05-17&originIata=DUB&destinationIata=VIE&isReturn=true&discount=0&promoCode=&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0&tpStartDate=2026-05-15&tpEndDate=2026-05-17&tpDiscount=0&tpOriginIata=DUB&tpDestinationIata=VIE"
+      "google_flights_url": "https://www.google.com/travel/flights?q=Flights+from+DUB+to+VIE+on+2026-05-15+through+2026-05-17",
+      "skyscanner_url": "https://www.skyscanner.net/transport/flights/dub/vie/260515/260517/"
     }
-  ]
+  ],
+  "source": "sample"
 }

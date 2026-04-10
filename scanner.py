@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 """Weekend Getaway Flight Scanner.
 
-Scans Ryanair's public fare-finder API for cheap round-trip weekend flights
-(Fri evening out, Sun evening back) from Shannon (preferred) and Dublin
-into Europe, capped at EUR 100. Dublin fares are adjusted upward by the
-cost of a return Limerick<->Dublin bus so the two origins can be compared
-on an "effective price from Limerick" basis.
+Scans the Kiwi.com Tequila API for cheap round-trip weekend flights
+(Fri evening out, Sun evening back) from Shannon (preferred) and
+Dublin into Europe, capped at EUR 100. Dublin fares are adjusted
+upward by the cost of a return Limerick<->Dublin bus so the two
+origins can be compared on an "effective price from Limerick" basis.
+
+Booking links point at Google Flights and Skyscanner (stable public
+URL schemes), not the carrier's own site. Kiwi aggregates Ryanair,
+Aer Lingus, Wizz, easyJet and others, so coverage is broader than
+hitting Ryanair directly.
+
+Setup:
+    1. Get a free API key from https://tequila.kiwi.com
+    2. export KIWI_API_KEY='your-key-here'
+    3. pip install -r requirements.txt
+    4. python scanner.py
 
 Writes the results to dashboard/deals.json for the front-end to render.
 """
@@ -13,10 +24,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import quote_plus
 
 import requests
 
@@ -27,26 +40,27 @@ BUS_RETURN_COST_EUR = 30.0
 ORIGINS = ["SNN", "DUB"]  # Shannon first, Dublin as fallback.
 WEEKENDS_AHEAD = 16       # Scan ~4 months of upcoming weekends.
 
+# European destinations to include. Kiwi accepts a comma-separated list
+# of 2-letter country codes as `fly_to`. Ireland is excluded.
+EUROPE_COUNTRIES = (
+    "GB,FR,DE,ES,IT,PT,NL,BE,LU,AT,CH,CZ,PL,HU,SK,SI,HR,"
+    "GR,RO,BG,RS,ME,MK,AL,BA,SE,DK,NO,FI,EE,LV,LT,IS,MT,CY"
+)
+
 # Friday evening departures and Sunday afternoon/evening returns.
 OUTBOUND_FROM = "16:00"
 OUTBOUND_TO = "23:59"
 INBOUND_FROM = "15:00"
 INBOUND_TO = "23:59"
 
-RYANAIR_URL = "https://services-api.ryanair.com/farfnd/v4/roundTripFares"
+# Weekend getaways: direct flights only, cabin bag implicit.
+MAX_STOPOVERS = 0
+MAX_FLY_DURATION_HOURS = 5
+
+KIWI_URL = "https://api.tequila.kiwi.com/v2/search"
+API_KEY = os.environ.get("KIWI_API_KEY", "").strip()
 
 OUTPUT_PATH = Path(__file__).parent / "dashboard" / "deals.json"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-IE,en;q=0.9",
-    "Origin": "https://www.ryanair.com",
-    "Referer": "https://www.ryanair.com/",
-}
 
 
 # ---------- Date helpers ----------
@@ -64,100 +78,139 @@ def next_weekends(n: int) -> Iterator[tuple[dt.date, dt.date]]:
         yield friday, sunday
 
 
-# ---------- Ryanair fetch ----------
+def kiwi_date(d: dt.date) -> str:
+    """Kiwi Tequila expects DD/MM/YYYY."""
+    return d.strftime("%d/%m/%Y")
+
+
+# ---------- Deep-link builders ----------
+def google_flights_url(origin: str, dest: str, out_date: str, in_date: str) -> str:
+    """Stable Google Flights search URL using the natural-language `q` param."""
+    q = f"Flights from {origin} to {dest} on {out_date} through {in_date}"
+    return "https://www.google.com/travel/flights?q=" + quote_plus(q)
+
+
+def skyscanner_url(origin: str, dest: str, out_date: str, in_date: str) -> str:
+    """Skyscanner direct search URL (yyMMdd date format, lowercase IATA)."""
+    out_yy = dt.date.fromisoformat(out_date).strftime("%y%m%d")
+    in_yy = dt.date.fromisoformat(in_date).strftime("%y%m%d")
+    return (
+        f"https://www.skyscanner.net/transport/flights/"
+        f"{origin.lower()}/{dest.lower()}/{out_yy}/{in_yy}/"
+    )
+
+
+# ---------- Kiwi fetch ----------
 def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
     params = {
-        "departureAirportIataCode": origin,
-        "outboundDepartureDateFrom": friday.isoformat(),
-        "outboundDepartureDateTo": friday.isoformat(),
-        "outboundDepartureTimeFrom": OUTBOUND_FROM,
-        "outboundDepartureTimeTo": OUTBOUND_TO,
-        "inboundDepartureDateFrom": sunday.isoformat(),
-        "inboundDepartureDateTo": sunday.isoformat(),
-        "inboundDepartureTimeFrom": INBOUND_FROM,
-        "inboundDepartureTimeTo": INBOUND_TO,
+        "fly_from": origin,
+        "fly_to": EUROPE_COUNTRIES,
+        "date_from": kiwi_date(friday),
+        "date_to": kiwi_date(friday),
+        "return_from": kiwi_date(sunday),
+        "return_to": kiwi_date(sunday),
+        "flight_type": "round",
+        "curr": "EUR",
         # Ask for slightly more than our cap so Dublin fares that would fit
-        # after subtracting the bus surcharge still come through.
-        "priceValueTo": str(int(PRICE_CAP_EUR + BUS_RETURN_COST_EUR)),
-        "currency": "EUR",
-        "market": "en-ie",
-        "adultPaxCount": "1",
-        "limit": "50",
-        "offset": "0",
+        # after adding the bus surcharge still come through.
+        "price_to": int(PRICE_CAP_EUR + BUS_RETURN_COST_EUR),
+        "max_stopovers": MAX_STOPOVERS,
+        "max_fly_duration": MAX_FLY_DURATION_HOURS,
+        "dtime_from": OUTBOUND_FROM,
+        "dtime_to": OUTBOUND_TO,
+        "ret_dtime_from": INBOUND_FROM,
+        "ret_dtime_to": INBOUND_TO,
+        "adults": 1,
+        "limit": 200,
+        "sort": "price",
+        "asc": 1,
     }
-    resp = requests.get(RYANAIR_URL, params=params, headers=HEADERS, timeout=30)
+    headers = {"apikey": API_KEY, "accept": "application/json"}
+    resp = requests.get(KIWI_URL, params=params, headers=headers, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
 
 # ---------- Normalisation ----------
-def _city_name(airport: dict) -> str:
-    city = airport.get("city")
-    if isinstance(city, dict):
-        return city.get("name") or airport.get("name", "")
-    return airport.get("cityName") or airport.get("name", "")
-
-
-def normalise_fare(fare: dict, origin: str) -> dict | None:
-    try:
-        outbound = fare["outbound"]
-        inbound = fare["inbound"]
-        arr = outbound["arrivalAirport"]
-        summary = fare["summary"]["price"]
-    except KeyError:
+def normalise_fare(item: dict, origin: str) -> dict | None:
+    """Turn a Kiwi `data[*]` entry into our flat deal schema."""
+    dest_iata = item.get("flyTo")
+    if not dest_iata:
         return None
 
-    flight_price = float(summary["value"])
-    bus_surcharge = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
-    effective_price = flight_price + bus_surcharge
-
-    coords = arr.get("coordinates") or {}
     try:
-        lat = float(coords["latitude"])
-        lon = float(coords["longitude"])
+        lat = float(item["latTo"])
+        lon = float(item["lngTo"])
     except (KeyError, TypeError, ValueError):
         return None
 
-    out_date = outbound["departureDate"][:10]
-    in_date = inbound["departureDate"][:10]
-    dest_iata = arr["iataCode"]
+    price = float(item.get("price", 0))
+    bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
+    effective = price + bus
+
+    country = item.get("countryTo") or {}
+    country_name = country.get("name", "") if isinstance(country, dict) else ""
+
+    # A round-trip item's `route` contains segments tagged with `return`:
+    # 0 for outbound legs, 1 for inbound legs.
+    route = item.get("route") or []
+    outbound_segs = [s for s in route if s.get("return", 0) == 0]
+    inbound_segs = [s for s in route if s.get("return", 0) == 1]
+    if not outbound_segs or not inbound_segs:
+        return None
+
+    out_first, out_last = outbound_segs[0], outbound_segs[-1]
+    in_first, in_last = inbound_segs[0], inbound_segs[-1]
+
+    out_dep = out_first.get("local_departure", "")
+    out_arr = out_last.get("local_arrival", "")
+    in_dep = in_first.get("local_departure", "")
+    in_arr = in_last.get("local_arrival", "")
+
+    if not out_dep or not in_dep:
+        return None
+
+    out_date = out_dep[:10]
+    in_date = in_dep[:10]
+
+    out_flight = f"{out_first.get('airline', '')}{out_first.get('flight_no', '')}".strip()
+    in_flight = f"{in_first.get('airline', '')}{in_first.get('flight_no', '')}".strip()
 
     return {
         "origin": origin,
         "destination_iata": dest_iata,
-        "destination_city": _city_name(arr),
-        "destination_country": arr.get("countryName", ""),
+        "destination_city": item.get("cityTo", dest_iata),
+        "destination_country": country_name,
         "destination_lat": lat,
         "destination_lon": lon,
-        "flight_price_eur": round(flight_price, 2),
-        "bus_surcharge_eur": round(bus_surcharge, 2),
-        "effective_price_eur": round(effective_price, 2),
-        "currency": summary.get("currencyCode", "EUR"),
-        "outbound_departure": outbound["departureDate"],
-        "outbound_arrival": outbound["arrivalDate"],
-        "outbound_flight_number": outbound.get("flightNumber", ""),
-        "inbound_departure": inbound["departureDate"],
-        "inbound_arrival": inbound["arrivalDate"],
-        "inbound_flight_number": inbound.get("flightNumber", ""),
-        "booking_url": build_booking_url(origin, dest_iata, out_date, in_date),
+        "flight_price_eur": round(price, 2),
+        "bus_surcharge_eur": round(bus, 2),
+        "effective_price_eur": round(effective, 2),
+        "currency": "EUR",
+        "outbound_departure": out_dep,
+        "outbound_arrival": out_arr,
+        "outbound_flight_number": out_flight,
+        "inbound_departure": in_dep,
+        "inbound_arrival": in_arr,
+        "inbound_flight_number": in_flight,
+        "google_flights_url": google_flights_url(origin, dest_iata, out_date, in_date),
+        "skyscanner_url": skyscanner_url(origin, dest_iata, out_date, in_date),
     }
-
-
-def build_booking_url(origin: str, dest: str, out_date: str, in_date: str) -> str:
-    return (
-        "https://www.ryanair.com/ie/en/trip/flights/select"
-        f"?adults=1&teens=0&children=0&infants=0"
-        f"&dateOut={out_date}&dateIn={in_date}"
-        f"&originIata={origin}&destinationIata={dest}"
-        f"&isReturn=true&discount=0&promoCode="
-        f"&tpAdults=1&tpTeens=0&tpChildren=0&tpInfants=0"
-        f"&tpStartDate={out_date}&tpEndDate={in_date}&tpDiscount=0"
-        f"&tpOriginIata={origin}&tpDestinationIata={dest}"
-    )
 
 
 # ---------- Main ----------
 def main() -> int:
+    if not API_KEY:
+        print(
+            "ERROR: KIWI_API_KEY environment variable is not set.\n"
+            "\n"
+            "Get a free Tequila API key at https://tequila.kiwi.com, then:\n"
+            "    export KIWI_API_KEY='your-key-here'\n"
+            "    python scanner.py\n",
+            file=sys.stderr,
+        )
+        return 1
+
     all_deals: list[dict] = []
     weekends = list(next_weekends(WEEKENDS_AHEAD))
     print(
@@ -174,18 +227,18 @@ def main() -> int:
                 print(f"  [warn] {label}: {e}", file=sys.stderr)
                 continue
 
-            fares = data.get("fares") or []
+            items = data.get("data") or []
             kept = 0
-            for fare in fares:
-                deal = normalise_fare(fare, origin)
+            for item in items:
+                deal = normalise_fare(item, origin)
                 if deal is None:
                     continue
                 if deal["effective_price_eur"] <= PRICE_CAP_EUR:
                     all_deals.append(deal)
                     kept += 1
-            print(f"  {label}: {len(fares)} fares, {kept} under cap")
-            # Be polite to the public endpoint.
-            time.sleep(0.3)
+            print(f"  {label}: {len(items)} results, {kept} under cap")
+            # Be polite to the free tier.
+            time.sleep(0.4)
 
     # Dedupe on (origin, destination, outbound date) keeping the cheapest.
     dedup: dict[tuple[str, str, str], dict] = {}
@@ -202,6 +255,7 @@ def main() -> int:
         "bus_return_cost_eur": BUS_RETURN_COST_EUR,
         "origins": ORIGINS,
         "weekends_scanned": len(weekends),
+        "source": "kiwi-tequila",
         "deals": deals,
     }
 
