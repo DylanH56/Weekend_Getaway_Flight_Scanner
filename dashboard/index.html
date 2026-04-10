@@ -16,7 +16,8 @@
       <p class="subtitle">
         Friday evening &rarr; Sunday evening &middot;
         Shannon &amp; Dublin &rarr; Europe &middot;
-        <span class="cap">under &euro;100</span>
+        Ryanair direct &middot;
+        <span class="cap">Fri 16:00+ / Sun 15:00+</span>
       </p>
     </div>
     <p class="meta" id="meta">Loading deals&hellip;</p>
@@ -26,7 +27,10 @@
     <div id="map"></div>
     <aside id="sidebar">
       <div class="sidebar-header">
-        <h2>Deals</h2>
+        <h2 id="deals-title">Deals</h2>
+        <button id="clear-destination" class="clear-dest-btn" style="display:none;">
+          &larr; show all destinations
+        </button>
         <div class="filters">
           <label>
             <input type="checkbox" id="filter-snn" checked>
@@ -34,8 +38,19 @@
           </label>
           <label>
             <input type="checkbox" id="filter-dub" checked>
-            <span class="dot dub"></span> Dublin (+&euro;30 bus)
+            <span class="dot dub"></span> Dublin <span class="muted">(+&euro;30 bus)</span>
           </label>
+        </div>
+        <div class="price-slider-row">
+          <label>
+            Max price
+            <span id="price-max-label">&euro;100</span>
+          </label>
+          <input type="range" id="price-max" min="20" max="150" step="5" value="100">
+          <div class="slider-ticks">
+            <span>&euro;20</span>
+            <span>&euro;150</span>
+          </div>
         </div>
         <div class="sort-row">
           <label>Sort by

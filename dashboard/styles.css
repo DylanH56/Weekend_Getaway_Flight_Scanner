@@ -126,6 +126,108 @@ main {
   margin-left: 4px;
 }
 
+.price-slider-row {
+  margin: 10px 0 6px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.price-slider-row label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.price-slider-row #price-max-label {
+  color: #4ade80;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.price-slider-row input[type=range] {
+  width: 100%;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+
+.slider-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.filters .muted {
+  color: #64748b;
+  font-weight: 400;
+}
+
+.clear-dest-btn {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  background: #1e293b;
+  color: #38bdf8;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.clear-dest-btn:hover {
+  background: #0f172a;
+  border-color: #38bdf8;
+}
+
+/* Google-Flights-Explore-style price badge markers on the map */
+.price-badge {
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1.5px solid #475569;
+  border-radius: 14px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition: transform .1s, border-color .1s, background .1s;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+.price-badge:hover {
+  transform: translateY(-1px) scale(1.08);
+  border-color: #38bdf8;
+  z-index: 1000;
+}
+.price-badge.snn {
+  border-color: rgba(74, 222, 128, 0.6);
+}
+.price-badge.snn:hover {
+  border-color: #4ade80;
+}
+.price-badge.dub {
+  border-color: rgba(96, 165, 250, 0.6);
+}
+.price-badge.dub:hover {
+  border-color: #60a5fa;
+}
+.price-badge.selected {
+  background: #38bdf8;
+  color: #0f172a;
+  border-color: #38bdf8;
+  transform: scale(1.1);
+  z-index: 999;
+}
+
+/* Cleaner Leaflet DivIcon defaults for our badges */
+.leaflet-div-icon {
+  background: transparent;
+  border: none;
+}
+
 #deal-list {
   list-style: none;
   padding: 12px;

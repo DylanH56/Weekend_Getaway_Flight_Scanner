@@ -100,8 +100,18 @@ def _http_get(url: str, **kwargs):
 
 
 # ---------- Config ----------
-PRICE_CAP_EUR = 100.0
+# Upper bound for the scanner's flight-price filter (applied to
+# Ryanair's raw round-trip fare, NOT the Limerick-bus-adjusted number).
+# The dashboard renders a slider defaulting to EUR 100 that re-filters
+# the already-loaded deals client-side, so EUR 150 here gives the user
+# 50 euro of slack either way without re-running the scan.
+PRICE_CAP_EUR = 150.0
 # Approx Limerick <-> Dublin return via Bus Eireann / Citylink / Dublin Coach.
+# NOT added to flight_price_eur anymore -- shown separately on the card
+# as an informational note so Dublin and Shannon are compared on raw
+# Ryanair price. The bus_surcharge_eur field is still emitted in each
+# deal so the dashboard can display it if the user wants to see the
+# total door-to-door cost.
 BUS_RETURN_COST_EUR = 30.0
 ORIGINS = ["SNN", "DUB"]  # Shannon first, Dublin as fallback.
 WEEKENDS_AHEAD = 26       # Scan ~6 months of upcoming weekends (live mode).
@@ -294,9 +304,11 @@ def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
         "outboundDepartureDateTo": friday.isoformat(),
         "inboundDepartureDateFrom": sunday.isoformat(),
         "inboundDepartureDateTo": sunday.isoformat(),
-        # Ask for slightly more than our cap so Dublin fares that still
-        # fit after adding the bus surcharge come through.
-        "priceValueTo": str(int(PRICE_CAP_EUR + BUS_RETURN_COST_EUR)),
+        # Filter on raw flight price directly; the bus surcharge isn't
+        # added to the headline number anymore (user wants SNN and DUB
+        # compared on like-for-like Ryanair cost). The dashboard slider
+        # re-filters client-side, defaults to EUR 100.
+        "priceValueTo": str(int(PRICE_CAP_EUR)),
         "currency": "EUR",
     }
     resp = _http_get(
@@ -667,7 +679,10 @@ def _run() -> int:
                 if deal is None:
                     continue
                 parsed += 1
-                if deal["effective_price_eur"] <= PRICE_CAP_EUR:
+                # Filter on raw flight price -- bus surcharge is now
+                # displayed separately on the card rather than rolled
+                # into the headline number.
+                if deal["flight_price_eur"] <= PRICE_CAP_EUR:
                     all_deals.append(deal)
                     kept += 1
             print(f"  {label}: {len(fares)} fares, {parsed} parsed, {kept} under cap")
@@ -701,14 +716,15 @@ def _run() -> int:
         )
         return write_prospects_mode("Ryanair unreachable")
 
-    # Dedupe on (origin, destination, outbound date) keeping the cheapest.
+    # Dedupe on (origin, destination, outbound date) keeping the cheapest
+    # *flight* price. Bus surcharge is informational only now.
     dedup: dict[tuple[str, str, str], dict] = {}
     for d in all_deals:
         key = (d["origin"], d["destination_iata"], d["outbound_departure"][:10])
-        if key not in dedup or d["effective_price_eur"] < dedup[key]["effective_price_eur"]:
+        if key not in dedup or d["flight_price_eur"] < dedup[key]["flight_price_eur"]:
             dedup[key] = d
 
-    deals = sorted(dedup.values(), key=lambda x: x["effective_price_eur"])
+    deals = sorted(dedup.values(), key=lambda x: x["flight_price_eur"])
 
     payload = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),

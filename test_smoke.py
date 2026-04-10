@@ -34,7 +34,7 @@ def make_deal(
     iata: str,
     city: str,
     country: str,
-    effective_price: float,
+    price: float,  # flight_price_eur (raw Ryanair fare, no bus)
     out_date: str = "2026-05-01",
     in_date: str = "2026-05-03",
     out_time: str = "19:25",
@@ -50,9 +50,9 @@ def make_deal(
         "destination_country": country,
         "destination_lat": 37.0,
         "destination_lon": -7.9,
-        "flight_price_eur": round(effective_price - bus, 2),
+        "flight_price_eur": round(price, 2),
         "bus_surcharge_eur": bus,
-        "effective_price_eur": round(effective_price, 2),
+        "effective_price_eur": round(price + bus, 2),
         "currency": "EUR",
         "outbound_departure": f"{out_date}T{out_time}:00",
         "outbound_arrival": f"{out_date}T21:00:00",
@@ -283,7 +283,8 @@ def test_scanner_normalise() -> None:
     assert_eq("deal is not None", deal is not None, True)
     if deal:
         assert_eq("destination_iata", deal["destination_iata"], "FAO")
-        assert_eq("effective_price_eur (SNN no bus)", deal["effective_price_eur"], 55.0)
+        assert_eq("flight_price_eur (raw Ryanair fare)", deal["flight_price_eur"], 55.0)
+        assert_eq("bus_surcharge_eur zero for SNN", deal["bus_surcharge_eur"], 0.0)
         assert_eq("has google_flights_url", "google.com" in deal["google_flights_url"], True)
         assert_eq("has skyscanner_url", "skyscanner" in deal["skyscanner_url"], True)
 
@@ -292,12 +293,16 @@ def test_scanner_normalise() -> None:
     deal = scanner.normalise_fare(morning, "SNN")
     assert_eq("morning flight rejected", deal is None, True)
 
-    print("\n=== scanner.normalise_fare: applies Limerick bus for DUB ===")
+    print("\n=== scanner.normalise_fare: DUB keeps raw flight price, bus separate ===")
     dub = fake_ryanair_response("DUB", "KRK", 50.0, out_time="19:25")["fares"][0]
     deal = scanner.normalise_fare(dub, "DUB")
     if deal:
-        assert_eq("bus surcharge present", deal["bus_surcharge_eur"], 30.0)
-        assert_eq("effective = price + bus", deal["effective_price_eur"], 80.0)
+        assert_eq("flight_price_eur is raw Ryanair fare (no bus)",
+                  deal["flight_price_eur"], 50.0)
+        assert_eq("bus surcharge tracked separately",
+                  deal["bus_surcharge_eur"], 30.0)
+        assert_eq("effective_price_eur kept for back-compat",
+                  deal["effective_price_eur"], 80.0)
 
     print("\n=== scanner.normalise_fare: falls back to IATA lookup for coords ===")
     # Build a fare object that matches current Ryanair shape (no coordinates)

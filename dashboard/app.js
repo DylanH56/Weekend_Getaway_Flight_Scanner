@@ -28,26 +28,33 @@ function fmtDate(iso) {
   });
 }
 
+// Raw Ryanair fare (flight_price_eur). The bus surcharge is now
+// informational only -- shown as a separate small line on each card
+// but not added to the headline number. Falls back to
+// effective_price_eur for compatibility with pre-refactor deals.json.
+function dealPrice(d) {
+  const p = d.flight_price_eur != null ? d.flight_price_eur : d.effective_price_eur;
+  return p == null ? Infinity : p;
+}
+
 function sortDeals(deals, mode) {
   const copy = deals.slice();
-  const priceOr = (d) => (d.effective_price_eur == null ? Infinity : d.effective_price_eur);
   if (mode === "price") {
     copy.sort((a, b) => {
-      const diff = priceOr(a) - priceOr(b);
+      const diff = dealPrice(a) - dealPrice(b);
       return diff !== 0 ? diff : a.outbound_departure.localeCompare(b.outbound_departure);
     });
   } else if (mode === "date") {
     copy.sort((a, b) => {
       const d = a.outbound_departure.localeCompare(b.outbound_departure);
       if (d !== 0) return d;
-      // within a weekend, SNN before DUB, then cheapest or alphabetical
       if (a.origin !== b.origin) return a.origin === "SNN" ? -1 : 1;
       return (a.destination_city || "").localeCompare(b.destination_city || "");
     });
   } else if (mode === "country") {
     copy.sort((a, b) => {
       const c = (a.destination_country || "").localeCompare(b.destination_country || "");
-      return c !== 0 ? c : priceOr(a) - priceOr(b);
+      return c !== 0 ? c : dealPrice(a) - dealPrice(b);
     });
   }
   return copy;
@@ -100,17 +107,23 @@ function renderDealCard(deal, idx) {
   li.className = "deal";
   li.dataset.idx = idx;
 
-  const hasPrice = deal.effective_price_eur != null;
+  const flightPrice = deal.flight_price_eur != null
+    ? deal.flight_price_eur
+    : deal.effective_price_eur;
+  const hasPrice = flightPrice != null;
   const priceDisplay = hasPrice
-    ? `&euro;${deal.effective_price_eur.toFixed(0)}`
+    ? `&euro;${flightPrice.toFixed(0)}`
     : `<span class="price-check">check &rarr;</span>`;
+  const bus = deal.bus_surcharge_eur || 0;
+  // Bus surcharge is now a separate small note, not rolled into the
+  // headline price. SNN is still "direct from Shannon" (zero bus).
   const priceNote = hasPrice
     ? (deal.origin === "SNN"
         ? "direct from Shannon"
-        : `incl. &euro;${deal.bus_surcharge_eur.toFixed(0)} Limerick bus`)
+        : `+&euro;${bus.toFixed(0)} Limerick bus (not incl.)`)
     : (deal.origin === "SNN"
         ? "live price via link"
-        : `+&euro;${deal.bus_surcharge_eur.toFixed(0)} Limerick bus`);
+        : `+&euro;${bus.toFixed(0)} Limerick bus (not incl.)`);
 
   const hasTimes = !!deal.outbound_arrival;
   const timesHtml = hasTimes
@@ -171,129 +184,197 @@ async function main() {
   const generated = payload.generated_at
     ? new Date(payload.generated_at).toLocaleString("en-IE")
     : "unknown";
-  if (payload.mode === "prospects") {
-    metaEl.innerHTML =
-      `<b>Prospects mode</b> &middot; ` +
-      `<b>${payload.deals.length}</b> route/weekend combos over ${payload.weekends_scanned} weekends &middot; ` +
-      `no live prices or time filter &mdash; click through to check &middot; ` +
-      `run <code>python scanner.py</code> for real Ryanair fares (no API key needed)`;
-  } else {
-    metaEl.innerHTML =
-      `Last scanned <b>${generated}</b> &middot; ` +
-      `<b>${payload.deals.length}</b> deals &le; &euro;${payload.price_cap_eur} &middot; ` +
-      `Dublin bus fare &euro;${payload.bus_return_cost_eur}`;
-  }
 
-  const markers = new Map(); // idx -> Leaflet marker
-  const cards = new Map(); // idx -> <li>
   const markerLayer = L.layerGroup().addTo(map);
 
-  function render() {
-    const showSNN = $("filter-snn").checked;
-    const showDUB = $("filter-dub").checked;
-    const sortMode = $("sort").value;
+  // Track which destination the user has clicked on the map. When set,
+  // the sidebar is filtered to show only deals for that IATA, across
+  // all weekends and both origins. Clicking the "clear" button or the
+  // same marker again resets it.
+  let selectedDestination = null;
 
-    listEl.innerHTML = "";
+  function currentFilters() {
+    const sliderEl = $("price-max");
+    const maxPrice = sliderEl ? parseInt(sliderEl.value, 10) : 150;
+    return {
+      showSNN: $("filter-snn").checked,
+      showDUB: $("filter-dub").checked,
+      maxPrice: isFinite(maxPrice) ? maxPrice : 150,
+      sortMode: $("sort").value,
+    };
+  }
+
+  // Apply filters common to both the map and the sidebar.
+  function applyFilters(deals, f) {
+    return deals.filter((d) => {
+      if (d.origin === "SNN" && !f.showSNN) return false;
+      if (d.origin === "DUB" && !f.showDUB) return false;
+      if (dealPrice(d) > f.maxPrice) return false;
+      return true;
+    });
+  }
+
+  // Group deals by destination IATA and pick the cheapest per destination.
+  // Used to render one price-badge marker per city on the map instead of
+  // one per weekend. Click a marker and the sidebar filters to the full
+  // list of weekends for that destination.
+  function groupCheapestByDestination(deals) {
+    const byIata = new Map();
+    for (const d of deals) {
+      const iata = d.destination_iata;
+      if (!iata) continue;
+      const existing = byIata.get(iata);
+      if (!existing || dealPrice(d) < dealPrice(existing)) {
+        byIata.set(iata, d);
+      }
+    }
+    return Array.from(byIata.values());
+  }
+
+  function updateMeta(visibleCount, totalCount) {
+    if (payload.mode === "prospects") {
+      metaEl.innerHTML =
+        `<b>Prospects mode</b> &middot; ` +
+        `<b>${totalCount}</b> route/weekend combos over ${payload.weekends_scanned} weekends &middot; ` +
+        `no live prices or time filter &mdash; click through to check`;
+    } else {
+      metaEl.innerHTML =
+        `Last scanned <b>${generated}</b> &middot; ` +
+        `<b>${visibleCount}</b> / ${totalCount} deals shown &middot; ` +
+        `Dublin bus fare &euro;${payload.bus_return_cost_eur} <span class="muted">(not in price)</span>`;
+    }
+  }
+
+  function renderMapMarkers(filteredDeals) {
     markerLayer.clearLayers();
-    markers.clear();
-    cards.clear();
+    const bounds = [];
+    const cheapestPerDest = groupCheapestByDestination(filteredDeals);
 
-    const filtered = payload.deals.filter(
-      (d) => (d.origin === "SNN" && showSNN) || (d.origin === "DUB" && showDUB)
-    );
-    const sorted = sortDeals(filtered, sortMode);
+    cheapestPerDest.forEach((deal) => {
+      const hasCoords =
+        typeof deal.destination_lat === "number" &&
+        typeof deal.destination_lon === "number" &&
+        isFinite(deal.destination_lat) &&
+        isFinite(deal.destination_lon);
+      if (!hasCoords) return;
+
+      const price = dealPrice(deal);
+      const selected = selectedDestination === deal.destination_iata;
+      const originClass = deal.origin.toLowerCase();
+      const html = `<div class="price-badge ${originClass}${selected ? " selected" : ""}" data-iata="${deal.destination_iata}">&euro;${price.toFixed(0)}</div>`;
+      const icon = L.divIcon({
+        className: "",  // we style the inner div directly
+        html,
+        iconSize: null,
+        iconAnchor: [20, 12],
+      });
+
+      const marker = L.marker(
+        [deal.destination_lat, deal.destination_lon],
+        { icon, riseOnHover: true, title: deal.destination_city || deal.destination_iata }
+      );
+
+      marker.on("click", () => {
+        if (selectedDestination === deal.destination_iata) {
+          selectedDestination = null;
+        } else {
+          selectedDestination = deal.destination_iata;
+          map.panTo([deal.destination_lat, deal.destination_lon], { animate: true });
+        }
+        render();
+      });
+
+      markerLayer.addLayer(marker);
+      bounds.push([deal.destination_lat, deal.destination_lon]);
+    });
+
+    bounds.push([52.7, -8.9]);  // Ireland anchor
+    if (bounds.length > 1 && selectedDestination === null) {
+      map.fitBounds(bounds, { padding: [60, 60], maxZoom: 6 });
+    }
+  }
+
+  function renderSidebar(filteredDeals, sortMode) {
+    listEl.innerHTML = "";
+
+    let list = filteredDeals;
+    if (selectedDestination) {
+      list = list.filter((d) => d.destination_iata === selectedDestination);
+    }
+    const sorted = sortDeals(list, sortMode);
+
+    const titleEl = $("deals-title");
+    if (selectedDestination) {
+      const sample = sorted[0];
+      const city = sample ? (sample.destination_city || selectedDestination) : selectedDestination;
+      titleEl.textContent = `${city} (${selectedDestination})`;
+      $("clear-destination").style.display = "block";
+    } else {
+      titleEl.textContent = `Deals`;
+      $("clear-destination").style.display = "none";
+    }
 
     if (sorted.length === 0) {
       listEl.innerHTML = '<p class="empty">No deals match the current filters.</p>';
       return;
     }
 
-    const bounds = [];
-
     sorted.forEach((deal, idx) => {
       const li = renderDealCard(deal, idx);
       listEl.appendChild(li);
-      cards.set(idx, li);
-
-      // Deals with unknown coordinates still render in the sidebar
-      // but don't get a map marker. Happens when Ryanair returns a
-      // destination we don't have in the IATA lookup table.
-      const hasCoords =
-        typeof deal.destination_lat === "number" &&
-        typeof deal.destination_lon === "number" &&
-        isFinite(deal.destination_lat) &&
-        isFinite(deal.destination_lon);
-
-      if (!hasCoords) {
-        // Clicking the card with no marker just highlights the card.
-        li.addEventListener("click", (e) => {
-          if (e.target.tagName === "A") return;
-          li.classList.add("highlighted");
-          setTimeout(() => li.classList.remove("highlighted"), 1500);
-        });
-        return;
-      }
-
-      const colors = ORIGIN_COLOR[deal.origin];
-      const marker = L.circleMarker(
-        [deal.destination_lat, deal.destination_lon],
-        {
-          radius: 8,
-          color: colors.stroke,
-          fillColor: colors.fill,
-          fillOpacity: 0.85,
-          weight: 2,
-        }
-      );
-
-      const popupHtml = `
-        <b>${deal.destination_city || deal.destination_iata}</b>
-        <span style="color:#94a3b8"> (${deal.destination_iata})</span><br>
-        <span style="color:#4ade80;font-size:15px;font-weight:700">&euro;${deal.effective_price_eur.toFixed(0)}</span>
-        from ${ORIGIN_LABEL[deal.origin]}<br>
-        <span style="color:#cbd5e1">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span><br>
-        <a href="${deal.google_flights_url}" target="_blank" rel="noopener">Google Flights</a>
-        &nbsp;&middot;&nbsp;
-        <a href="${deal.skyscanner_url}" target="_blank" rel="noopener">Skyscanner</a>
-      `;
-      marker.bindPopup(popupHtml);
-
-      marker.on("click", () => {
-        const el = cards.get(idx);
-        if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "center" });
-          el.classList.add("highlighted");
-          setTimeout(() => el.classList.remove("highlighted"), 1500);
-        }
-      });
-
       li.addEventListener("click", (e) => {
         if (e.target.tagName === "A") return;
-        marker.openPopup();
-        map.panTo([deal.destination_lat, deal.destination_lon]);
+        // Pan the map to this card's destination if we have coords.
+        const hasCoords =
+          typeof deal.destination_lat === "number" &&
+          typeof deal.destination_lon === "number" &&
+          isFinite(deal.destination_lat) &&
+          isFinite(deal.destination_lon);
+        if (hasCoords) {
+          map.panTo([deal.destination_lat, deal.destination_lon], { animate: true });
+        }
+        li.classList.add("highlighted");
+        setTimeout(() => li.classList.remove("highlighted"), 1500);
       });
-
-      markerLayer.addLayer(marker);
-      markers.set(idx, marker);
-      bounds.push([deal.destination_lat, deal.destination_lon]);
     });
+  }
 
-    // Always include Ireland in the bounds so context stays clear.
-    bounds.push([52.7, -8.9]);
-    if (bounds.length > 1) {
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
-    }
+  function render() {
+    const f = currentFilters();
+    const filtered = applyFilters(payload.deals, f);
+    updateMeta(filtered.length, payload.deals.length);
+    renderMapMarkers(filtered);
+    renderSidebar(filtered, f.sortMode);
+  }
+
+  // Slider label live-updates as you drag; map+sidebar re-render on every change.
+  const priceSlider = $("price-max");
+  const priceLabel = $("price-max-label");
+  if (priceSlider && priceLabel) {
+    priceSlider.addEventListener("input", () => {
+      priceLabel.innerHTML = `&euro;${priceSlider.value}`;
+      render();
+    });
   }
 
   // In prospects mode, default to sorting by date since prices are unknown.
   if (payload.mode === "prospects") {
     const sel = $("sort");
     if (sel && sel.value === "price") sel.value = "date";
+    // Max slider to 150 isn't meaningful with null prices; open it fully.
+    if (priceSlider) {
+      priceSlider.value = "150";
+      priceLabel.innerHTML = "&euro;150";
+    }
   }
 
   $("filter-snn").addEventListener("change", render);
   $("filter-dub").addEventListener("change", render);
   $("sort").addEventListener("change", render);
+  $("clear-destination").addEventListener("click", () => {
+    selectedDestination = null;
+    render();
+  });
 
   render();
 }

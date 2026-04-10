@@ -69,6 +69,21 @@ def _key(deal: dict) -> tuple[str, str, str]:
     )
 
 
+def _price(deal: dict) -> float | None:
+    """Raw Ryanair flight price (not the effective-with-bus number).
+
+    The dashboard renders flight_price_eur as the headline; the
+    notifier compares on the same basis so Discord alerts match what
+    the user sees in the UI.
+    """
+    p = deal.get("flight_price_eur")
+    if p is None:
+        # Backwards compatibility with very old deals.json files that
+        # predate the flight_price/effective_price split.
+        p = deal.get("effective_price_eur")
+    return p
+
+
 def find_newly_alertable(
     old_deals: list[dict],
     new_deals: list[dict],
@@ -80,16 +95,19 @@ def find_newly_alertable(
     is "newly alertable". A stable EUR 60 deal that was already <= cap
     yesterday is NOT re-alerted. A brand new deal that is under cap is
     alerted. A disappearing/more-expensive deal is ignored.
+
+    Uses `flight_price_eur` as the comparison basis -- bus surcharge is
+    informational only and doesn't affect whether we ping you.
     """
     old_alertable_keys: set[tuple[str, str, str]] = set()
     for d in old_deals:
-        p = d.get("effective_price_eur")
+        p = _price(d)
         if p is not None and p <= alert_cap:
             old_alertable_keys.add(_key(d))
 
     finds: list[dict] = []
     for d in new_deals:
-        p = d.get("effective_price_eur")
+        p = _price(d)
         if p is None or p > alert_cap:
             continue
         if _key(d) not in old_alertable_keys:
@@ -109,7 +127,7 @@ def _date_range(deal: dict) -> str:
 
 
 def _one_liner(deal: dict) -> str:
-    price = deal.get("effective_price_eur") or 0
+    price = _price(deal) or 0
     city = deal.get("destination_city") or deal.get("destination_iata", "?")
     iata = deal.get("destination_iata", "")
     origin = deal.get("origin", "?")
@@ -122,7 +140,7 @@ def _notify_discord(webhook_url: str, deals: list[dict], alert_cap: float) -> No
     batch = deals[:MAX_NOTIFY_ITEMS]
     embeds: list[dict] = []
     for d in batch:
-        price = d.get("effective_price_eur")
+        price = _price(d)
         if price is None:
             continue
         city = d.get("destination_city") or d.get("destination_iata", "?")
@@ -130,7 +148,9 @@ def _notify_discord(webhook_url: str, deals: list[dict], alert_cap: float) -> No
         origin = d.get("origin", "?")
         bus = d.get("bus_surcharge_eur", 0) or 0
         bus_note = (
-            f"incl. EUR {bus:.0f} Limerick bus" if bus else "direct from Shannon"
+            f"+ EUR {bus:.0f} Limerick bus (not incl.)"
+            if bus
+            else "direct from Shannon"
         )
         out_dep = _hhmm(d.get("outbound_departure") or "")
         out_arr = _hhmm(d.get("outbound_arrival") or "")
