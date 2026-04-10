@@ -7,18 +7,26 @@
 #      (no API key, no signup). If every Ryanair call fails, it falls
 #      back to the route-catalogue prospects mode so the workflow
 #      still produces something useful.
-#   3. Commits the updated deals.json back to main (only if it actually
+#   3. If NOTIFY_DISCORD_WEBHOOK_URL is configured, posts a Discord
+#      message for every deal that is now <= EUR NOTIFY_PRICE_CAP_EUR
+#      (default 80) but wasn't under that cap in the previous scan.
+#   4. Commits the updated deals.json back to main (only if it actually
 #      changed, and with [skip ci] so this doesn't loop).
-#   4. Publishes the `dashboard/` folder to GitHub Pages.
+#   5. Publishes the `dashboard/` folder to GitHub Pages.
 #
 # One-time setup required from you (can't be done from code):
 #   A. Settings -> Pages -> Source: "GitHub Actions".
 #   B. Merge this branch to main (or the workflow never fires on schedule).
 #   C. Actions tab -> "Scan flights and deploy dashboard" -> Run workflow
 #      to trigger the first run immediately instead of waiting for cron.
+#   D. (Optional, for phone alerts) Create a Discord webhook in any
+#      server you control (Server Settings -> Integrations -> Webhooks
+#      -> New Webhook -> Copy Webhook URL) and add it as a repo secret
+#      named NOTIFY_DISCORD_WEBHOOK_URL. To change the alert threshold,
+#      set a repo variable NOTIFY_PRICE_CAP_EUR (default is 80).
 #
 # After that it runs itself. The Pages URL appears on the workflow run
-# summary -- bookmark it. NO API KEYS OR SECRETS NEEDED.
+# summary -- bookmark it. Discord notifications are optional.
 
 name: Scan flights and deploy dashboard
 
@@ -70,6 +78,11 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run scanner
+        env:
+          # Both are optional -- missing secret/var => scanner simply
+          # skips the Discord notification step with a no-op log line.
+          NOTIFY_DISCORD_WEBHOOK_URL: ${{ secrets.NOTIFY_DISCORD_WEBHOOK_URL }}
+          NOTIFY_PRICE_CAP_EUR: ${{ vars.NOTIFY_PRICE_CAP_EUR }}
         run: python scanner.py
 
       - name: Commit refreshed deals.json (if changed)

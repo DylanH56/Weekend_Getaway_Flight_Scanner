@@ -57,17 +57,31 @@ INBOUND_TO = "23:59"
 # matching date/time/price filters, no authentication required.
 RYANAIR_URL = "https://services-api.ryanair.com/farfnd/v4/roundTripFares"
 
-# Browser-ish headers to be polite and look like the ryanair.com
-# fare-finder page that normally calls this endpoint.
+# Browser-ish headers to look like a current Chrome hitting the
+# ryanair.com fare-finder page, which is the only client that normally
+# calls this endpoint. Cloudflare (Ryanair sits behind it) has been
+# getting stricter about bot-looking clients, so we send a full set of
+# sec-* client hints rather than the bare minimum. If this still 403s
+# from GitHub Actions runners, the next step is swapping `requests` for
+# `curl_cffi` which can also spoof the TLS fingerprint.
 RYANAIR_HEADERS = {
     "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-IE,en;q=0.9",
+    "Accept-Language": "en-IE,en-GB;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
     "Origin": "https://www.ryanair.com",
-    "Referer": "https://www.ryanair.com/",
+    "Referer": "https://www.ryanair.com/ie/en/cheap-flights",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
+    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
 }
 
 OUTPUT_PATH = Path(__file__).parent / "dashboard" / "deals.json"
@@ -399,15 +413,34 @@ def main() -> int:
 
     total_calls = 0
     failed_calls = 0
+    error_summary: dict[str, int] = {}
     for origin in ORIGINS:
         for friday, sunday in weekends:
             total_calls += 1
             label = f"{origin} {friday}->{sunday}"
             try:
                 data = fetch_fares(origin, friday, sunday)
+            except requests.HTTPError as e:
+                failed_calls += 1
+                code = e.response.status_code if e.response is not None else "?"
+                err_key = f"HTTP {code}"
+                error_summary[err_key] = error_summary.get(err_key, 0) + 1
+                # Log the body once per distinct status code so we can see
+                # Cloudflare challenge pages etc.
+                if error_summary[err_key] == 1 and e.response is not None:
+                    snippet = e.response.text[:200].replace("\n", " ")
+                    print(
+                        f"  [warn] {label}: HTTP {code}  body: {snippet!r}",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(f"  [warn] {label}: HTTP {code}", file=sys.stderr)
+                continue
             except requests.RequestException as e:
                 failed_calls += 1
-                print(f"  [warn] {label}: {e}", file=sys.stderr)
+                err_key = type(e).__name__
+                error_summary[err_key] = error_summary.get(err_key, 0) + 1
+                print(f"  [warn] {label}: {err_key}: {e}", file=sys.stderr)
                 continue
 
             fares = data.get("fares") or []
@@ -423,12 +456,23 @@ def main() -> int:
             # Be polite to the public endpoint.
             time.sleep(0.3)
 
+    print(
+        f"\nRyanair scan summary: {total_calls} calls, "
+        f"{total_calls - failed_calls} ok, {failed_calls} failed, "
+        f"{len(all_deals)} deals under cap."
+    )
+    if error_summary:
+        print(
+            "Failure breakdown: "
+            + ", ".join(f"{k}={v}" for k, v in sorted(error_summary.items()))
+        )
+
     # If Ryanair was totally unreachable (every call failed), fall back
     # to the route-catalogue so the dashboard still has *something* to
     # render instead of an empty deals.json.
     if total_calls > 0 and failed_calls == total_calls:
         print(
-            f"\nAll {total_calls} Ryanair calls failed -- falling back to prospects mode.",
+            f"All {total_calls} Ryanair calls failed -- falling back to prospects mode.",
             file=sys.stderr,
         )
         return write_prospects_mode("Ryanair unreachable")
@@ -452,6 +496,15 @@ def main() -> int:
         "source": "ryanair-farfnd",
         "deals": deals,
     }
+
+    # Notify BEFORE we overwrite deals.json, so the notifier can compare
+    # the new scan against the old file on disk. Wrapped in a bare try
+    # so a Discord/ntfy failure never tanks the scan itself.
+    try:
+        from notifier import notify_if_configured
+        notify_if_configured(OUTPUT_PATH, deals)
+    except Exception as e:
+        print(f"  [notify] error: {e}", file=sys.stderr)
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(json.dumps(payload, indent=2))
