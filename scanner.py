@@ -319,6 +319,19 @@ def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
 
 
 # ---------- Normalisation ----------
+# Per-run reject counters for visibility. Bumped in normalise_fare and
+# dumped at the end of the scan. Helps diagnose "Ryanair returned 700
+# fares, we kept 0" situations where we need to know WHICH gate ate
+# everything.
+_reject_counts: dict[str, int] = {
+    "missing_fields": 0,
+    "missing_coords": 0,
+    "missing_dates": 0,
+    "outside_evening_window": 0,
+    "missing_iata": 0,
+}
+
+
 def _city_name(airport: dict) -> str:
     city = airport.get("city")
     if isinstance(city, dict):
@@ -334,6 +347,7 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
         arr = outbound["arrivalAirport"]
         summary = fare["summary"]["price"]
     except (KeyError, TypeError):
+        _reject_counts["missing_fields"] += 1
         return None
 
     flight_price = float(summary.get("value", 0))
@@ -345,6 +359,7 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
         lat = float(coords["latitude"])
         lon = float(coords["longitude"])
     except (KeyError, TypeError, ValueError):
+        _reject_counts["missing_coords"] += 1
         return None
 
     out_dep = outbound.get("departureDate", "")
@@ -352,6 +367,7 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
     in_dep = inbound.get("departureDate", "")
     in_arr = inbound.get("arrivalDate", "")
     if not out_dep or not in_dep:
+        _reject_counts["missing_dates"] += 1
         return None
 
     # Belt-and-braces: reject anything outside the Fri-evening /
@@ -361,12 +377,15 @@ def normalise_fare(fare: dict, origin: str) -> dict | None:
     out_hhmm = out_dep[11:16]  # "YYYY-MM-DDTHH:MM:SS" -> "HH:MM"
     in_hhmm = in_dep[11:16]
     if not (OUTBOUND_FROM <= out_hhmm <= OUTBOUND_TO):
+        _reject_counts["outside_evening_window"] += 1
         return None
     if not (INBOUND_FROM <= in_hhmm <= INBOUND_TO):
+        _reject_counts["outside_evening_window"] += 1
         return None
 
     dest_iata = arr.get("iataCode", "")
     if not dest_iata:
+        _reject_counts["missing_iata"] += 1
         return None
     out_date = out_dep[:10]
     in_date = in_dep[:10]
@@ -562,6 +581,7 @@ def _run() -> int:
     total_calls = 0
     failed_calls = 0
     error_summary: dict[str, int] = {}
+    sample_dumped = False
     for origin in ORIGINS:
         for friday, sunday in weekends:
             total_calls += 1
@@ -592,15 +612,35 @@ def _run() -> int:
                 continue
 
             fares = data.get("fares") or []
+            # One-shot: dump the very first raw fare object we ever
+            # see so we can inspect the exact JSON shape Ryanair is
+            # sending. Crucial for diagnosing "N fares, 0 parsed"
+            # situations where the response schema doesn't match what
+            # normalise_fare expects.
+            if not sample_dumped and fares:
+                sample_dumped = True
+                try:
+                    dump = json.dumps(fares[0], indent=2, default=str)
+                    if len(dump) > 3000:
+                        dump = dump[:3000] + "\n  ...(truncated)"
+                    print(
+                        f"\n--- sample raw fare from first {label} ---\n"
+                        f"{dump}\n--- end sample ---\n",
+                        file=sys.stderr,
+                    )
+                except Exception as e:
+                    print(f"  [debug] failed to dump sample fare: {e}", file=sys.stderr)
             kept = 0
+            parsed = 0
             for fare in fares:
                 deal = normalise_fare(fare, origin)
                 if deal is None:
                     continue
+                parsed += 1
                 if deal["effective_price_eur"] <= PRICE_CAP_EUR:
                     all_deals.append(deal)
                     kept += 1
-            print(f"  {label}: {len(fares)} fares, {kept} under cap")
+            print(f"  {label}: {len(fares)} fares, {parsed} parsed, {kept} under cap")
             # Be polite to the public endpoint.
             time.sleep(0.3)
 
@@ -613,6 +653,12 @@ def _run() -> int:
         print(
             "Failure breakdown: "
             + ", ".join(f"{k}={v}" for k, v in sorted(error_summary.items()))
+        )
+    rejects = [(k, v) for k, v in _reject_counts.items() if v > 0]
+    if rejects:
+        print(
+            "Parse rejections: "
+            + ", ".join(f"{k}={v}" for k, v in sorted(rejects))
         )
 
     # If Ryanair was totally unreachable (every call failed), fall back
