@@ -154,6 +154,7 @@ function renderDealCard(deal, idx) {
     <div class="meta-row">
       <span class="badge ${deal.origin.toLowerCase()}">${ORIGIN_LABEL[deal.origin]}</span>
       ${deal.carrier_code ? `<span class="badge carrier carrier-${deal.carrier_code.toLowerCase()}">${deal.carrier_code}</span>` : ""}
+      ${deal.weekend_window_label ? `<span class="badge window">${deal.weekend_window_label}</span>` : ""}
       <span class="country">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span>
     </div>
     <div class="times">${timesHtml}</div>
@@ -194,6 +195,11 @@ async function main() {
   // same marker again resets it.
   let selectedDestination = null;
 
+  // Weekend-window filter state. Default: the classic Fri->Sun is
+  // enabled and all others are off (matches the pre-multi-window
+  // behaviour). User toggles chips to enable longer windows.
+  const enabledWindows = new Set(["fri_sun"]);
+
   function currentFilters() {
     const sliderEl = $("price-max");
     const maxPrice = sliderEl ? parseInt(sliderEl.value, 10) : 150;
@@ -202,6 +208,7 @@ async function main() {
       showDUB: $("filter-dub").checked,
       maxPrice: isFinite(maxPrice) ? maxPrice : 150,
       sortMode: $("sort").value,
+      windows: enabledWindows,
     };
   }
 
@@ -211,7 +218,45 @@ async function main() {
       if (d.origin === "SNN" && !f.showSNN) return false;
       if (d.origin === "DUB" && !f.showDUB) return false;
       if (dealPrice(d) > f.maxPrice) return false;
+      // Weekend window: default to fri_sun for deals that predate the
+      // multi-window field (back-compat with old deals.json).
+      const win = d.weekend_window || "fri_sun";
+      if (f.windows.size > 0 && !f.windows.has(win)) return false;
       return true;
+    });
+  }
+
+  // Render the chip row from payload.weekend_windows. Each chip shows
+  // the window label + a live count of deals that match (respecting
+  // the other filters, but ignoring the chip itself so toggling one on
+  // always shows its true capacity).
+  function renderWindowChips() {
+    const container = $("window-chips");
+    if (!container) return;
+    const windows = payload.weekend_windows || [{ id: "fri_sun", label: "Fri \u2192 Sun" }];
+    container.innerHTML = "";
+    windows.forEach((w) => {
+      // Count deals that would match if this window were the only
+      // window filter active (other filters still apply).
+      const f = currentFilters();
+      const otherFilters = { ...f, windows: new Set([w.id]) };
+      const count = applyFilters(payload.deals, otherFilters).length;
+
+      const chip = document.createElement("div");
+      chip.className = "window-chip" + (enabledWindows.has(w.id) ? " active" : "");
+      chip.innerHTML = `${w.label} <span class="count">${count}</span>`;
+      chip.addEventListener("click", () => {
+        if (enabledWindows.has(w.id)) {
+          // Don't let the user disable the last remaining window --
+          // that'd leave the dashboard empty with no obvious cause.
+          if (enabledWindows.size === 1) return;
+          enabledWindows.delete(w.id);
+        } else {
+          enabledWindows.add(w.id);
+        }
+        render();
+      });
+      container.appendChild(chip);
     });
   }
 
@@ -344,6 +389,7 @@ async function main() {
     const f = currentFilters();
     const filtered = applyFilters(payload.deals, f);
     updateMeta(filtered.length, payload.deals.length);
+    renderWindowChips();
     renderMapMarkers(filtered);
     renderSidebar(filtered, f.sortMode);
   }

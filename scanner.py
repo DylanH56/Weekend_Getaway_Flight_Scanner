@@ -241,12 +241,30 @@ EUROPE_ROUTES: dict[str, list[tuple[str, str, str, float, float]]] = {
 
 
 # ---------- Date helpers ----------
+# Weekend window definitions. Each entry is:
+#   (id, label, out_offset_from_friday, in_offset_from_friday)
+# where offsets are in days from the base Friday. The classic Fri->Sun
+# is (0, 2); Thursday night kick-off is (-1, 2); long weekend with
+# Monday return is (0, 3); bank-holiday Fri->Tue is (0, 4).
+#
+# The scanner queries every enabled window for every base weekend,
+# tags each deal with `weekend_window`, and the dashboard surfaces a
+# filter chip so the user can pick their preferred window(s).
+WEEKEND_WINDOWS: list[tuple[str, str, int, int]] = [
+    ("fri_sun", "Fri \u2192 Sun",   0, 2),  # classic 2-night weekend
+    ("thu_sun", "Thu \u2192 Sun",  -1, 2),  # 3-night, leave Thu evening
+    ("fri_mon", "Fri \u2192 Mon",   0, 3),  # 3-night, return Mon
+    ("fri_tue", "Fri \u2192 Tue",   0, 4),  # 4-night, bank-holiday long weekend
+]
+
+
 def next_weekends(n: int) -> Iterator[tuple[dt.date, dt.date]]:
     """Yield (friday, sunday) pairs for the next `n` upcoming weekends.
 
-    Always starts from the *next* Friday, never the current day, because a
-    Friday-evening departure booked on the same Friday morning isn't a
-    realistic weekend getaway opportunity.
+    Retained for backwards compatibility with code and tests that
+    just want the classic Fri->Sun pair. The scanner itself iterates
+    next_weekend_windows() so that multi-window scans fan out
+    automatically.
     """
     today = dt.date.today()
     days_to_friday = (4 - today.weekday()) % 7  # 4 == Friday
@@ -257,6 +275,31 @@ def next_weekends(n: int) -> Iterator[tuple[dt.date, dt.date]]:
         friday = first_friday + dt.timedelta(weeks=i)
         sunday = friday + dt.timedelta(days=2)
         yield friday, sunday
+
+
+def next_weekend_windows(
+    n: int,
+    windows: list[tuple[str, str, int, int]] | None = None,
+) -> Iterator[tuple[str, str, dt.date, dt.date]]:
+    """Yield (window_id, window_label, out_date, in_date) for every
+    (weekend, window) combination across the next `n` base Fridays.
+
+    Each base Friday fans out across the enabled weekend windows.
+    Callers get concrete outbound/return dates already computed.
+    """
+    if windows is None:
+        windows = WEEKEND_WINDOWS
+    today = dt.date.today()
+    days_to_friday = (4 - today.weekday()) % 7
+    if days_to_friday == 0:
+        days_to_friday = 7
+    first_friday = today + dt.timedelta(days=days_to_friday)
+    for i in range(n):
+        friday = first_friday + dt.timedelta(weeks=i)
+        for window_id, window_label, out_offset, in_offset in windows:
+            out_date = friday + dt.timedelta(days=out_offset)
+            in_date = friday + dt.timedelta(days=in_offset)
+            yield window_id, window_label, out_date, in_date
 
 
 # ---------- Deep-link builders ----------
@@ -1073,6 +1116,17 @@ def _run() -> int:
     per_source_summary: dict[str, dict] = {}
     sample_dumped: dict[str, bool] = {s["name"]: False for s in SOURCES}
 
+    # Fan out each base Friday across every enabled weekend window.
+    # The classic Fri->Sun still runs by default; Thu->Sun / Fri->Mon /
+    # Fri->Tue piggyback on the same scan and each contributes their
+    # own set of deals tagged with `weekend_window`.
+    window_specs = list(next_weekend_windows(len(weekends)))
+    print(
+        f"Weekend windows enabled: "
+        + ", ".join(w[1] for w in WEEKEND_WINDOWS)
+        + f"  ({len(window_specs)} total window-weekends)"
+    )
+
     for source in SOURCES:
         source_name = source["name"]
         source_label = source["label"]
@@ -1087,11 +1141,11 @@ def _run() -> int:
         print(f"\n--- {source_label} ---")
 
         for origin in ORIGINS:
-            for friday, sunday in weekends:
+            for window_id, window_label, out_date, in_date in window_specs:
                 source_calls += 1
-                label = f"{source_name} {origin} {friday}->{sunday}"
+                label = f"{source_name} {origin} {window_id} {out_date}->{in_date}"
                 try:
-                    data = fetch(origin, friday, sunday)
+                    data = fetch(origin, out_date, in_date)
                 except requests.HTTPError as e:
                     source_failed += 1
                     code = e.response.status_code if e.response is not None else "?"
@@ -1143,12 +1197,18 @@ def _run() -> int:
                     if deal is None:
                         continue
                     parsed += 1
+                    # Tag every deal with the window it came from so the
+                    # dashboard filter chip can distinguish Fri->Sun from
+                    # Fri->Mon etc. Cheap to add since the loop already
+                    # knows the current window.
+                    deal["weekend_window"] = window_id
+                    deal["weekend_window_label"] = window_label
                     if deal["flight_price_eur"] <= PRICE_CAP_EUR:
                         all_deals.append(deal)
                         kept += 1
                         source_deals_added += 1
                 print(f"  {label}: {len(fares)} fares, {parsed} parsed, {kept} under cap")
-                time.sleep(0.3)
+                time.sleep(0.25)
 
         per_source_summary[source_name] = {
             "label": source_label,
@@ -1191,15 +1251,17 @@ def _run() -> int:
         )
         return write_prospects_mode("All sources unreachable")
 
-    # Dedupe on (carrier, origin, destination, outbound date) keeping the
-    # cheapest flight price. Multiple carriers serving the same route on
-    # the same day are kept separately so the user can compare.
-    dedup: dict[tuple[str, str, str, str], dict] = {}
+    # Dedupe on (carrier, origin, destination, weekend_window, outbound date).
+    # Keeping the weekend window in the key means a Fri->Sun Berlin and a
+    # Fri->Mon Berlin are separate deals (different trip lengths); multiple
+    # flights on the same day/window/carrier collapse to the cheapest.
+    dedup: dict[tuple[str, str, str, str, str], dict] = {}
     for d in all_deals:
         key = (
             d.get("carrier_code", "?"),
             d["origin"],
             d["destination_iata"],
+            d.get("weekend_window", "fri_sun"),
             d["outbound_departure"][:10],
         )
         if key not in dedup or d["flight_price_eur"] < dedup[key]["flight_price_eur"]:
@@ -1216,6 +1278,10 @@ def _run() -> int:
         "mode": "live",
         "sources": [s["name"] for s in SOURCES],
         "source": "multi",  # legacy compatibility
+        "weekend_windows": [
+            {"id": wid, "label": wlabel}
+            for wid, wlabel, *_ in WEEKEND_WINDOWS
+        ],
         "deals": deals,
     }
 

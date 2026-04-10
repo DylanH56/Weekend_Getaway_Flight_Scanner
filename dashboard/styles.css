@@ -150,6 +150,38 @@ main {
   cursor: pointer;
 }
 
+.window-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+.window-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #94a3b8;
+  background: #0b1220;
+  cursor: pointer;
+  user-select: none;
+  transition: all .12s;
+}
+.window-chip:hover { border-color: #475569; color: #cbd5e1; }
+.window-chip.active {
+  background: #38bdf8;
+  color: #0b1220;
+  border-color: #38bdf8;
+  font-weight: 700;
+}
+.window-chip .count {
+  font-size: 10px;
+  opacity: 0.75;
+}
+
 .slider-ticks {
   display: flex;
   justify-content: space-between;
@@ -329,6 +361,12 @@ main {
 .badge.carrier { margin-left: 4px; font-size: 9px; padding: 2px 6px; }
 .badge.carrier-fr { background: rgba(253, 224, 71, .12); color: #fde047; border: 1px solid rgba(253, 224, 71, .4); }
 .badge.carrier-ei { background: rgba(34, 197, 94, .12); color: #86efac; border: 1px solid rgba(34, 197, 94, .4); }
+.badge.window {
+  margin-left: 4px;
+  background: rgba(148, 163, 184, .1);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, .3);
+}
 
 .times {
   font-size: 12px;

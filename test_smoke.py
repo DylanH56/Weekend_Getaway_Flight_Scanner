@@ -410,6 +410,36 @@ def test_source_registry() -> None:
         assert_eq(f"{src['name']} has normalise", callable(src.get("normalise")), True)
 
 
+def test_weekend_windows() -> None:
+    print("\n=== scanner.next_weekend_windows ===")
+    # 2 base weekends across 4 windows = 8 yielded tuples
+    results = list(scanner.next_weekend_windows(2))
+    assert_eq("8 window-weekends yielded (2 weekends x 4 windows)",
+              len(results), 8)
+
+    import datetime as dt
+    ids = [r[0] for r in results]
+    assert_eq("fri_sun window present", "fri_sun" in ids, True)
+    assert_eq("thu_sun window present", "thu_sun" in ids, True)
+    assert_eq("fri_mon window present", "fri_mon" in ids, True)
+    assert_eq("fri_tue window present", "fri_tue" in ids, True)
+
+    # Each fri_sun entry: out is Friday, in is 2 days later (Sunday)
+    for wid, _label, out_d, in_d in results:
+        if wid == "fri_sun":
+            assert_eq(f"fri_sun out is Friday", out_d.weekday(), 4)
+            assert_eq(f"fri_sun in is Sunday", in_d.weekday(), 6)
+        elif wid == "thu_sun":
+            assert_eq(f"thu_sun out is Thursday", out_d.weekday(), 3)
+            assert_eq(f"thu_sun in is Sunday", in_d.weekday(), 6)
+        elif wid == "fri_mon":
+            assert_eq(f"fri_mon out is Friday", out_d.weekday(), 4)
+            assert_eq(f"fri_mon in is Monday", in_d.weekday(), 0)
+        elif wid == "fri_tue":
+            assert_eq(f"fri_tue out is Friday", out_d.weekday(), 4)
+            assert_eq(f"fri_tue in is Tuesday", in_d.weekday(), 1)
+
+
 def test_send_test_notification() -> None:
     """Verify scanner.send_test_notification fires exactly one Discord POST."""
     print("\n=== scanner.send_test_notification ===")
@@ -524,6 +554,7 @@ def main() -> int:
     test_scanner_normalise()
     test_aer_lingus_normalise()
     test_source_registry()
+    test_weekend_windows()
     test_send_test_notification()
     test_fetch_fares_uses_http_get_seam()
     test_deeplink_shapes()
