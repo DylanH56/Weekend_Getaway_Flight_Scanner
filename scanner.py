@@ -160,6 +160,11 @@ LOG_PATH = Path(__file__).parent / "dashboard" / "last_scan_log.txt"
 # with lowest_ever_eur / price_delta_eur and to fire "cheapest ever"
 # Discord alerts.
 HISTORY_PATH = Path(__file__).parent / "dashboard" / "history.json"
+# Persistent Wikipedia thumbnail cache: once we know Birmingham's
+# thumbnail URL it's stable, so we never refetch.
+PHOTO_CACHE_PATH = Path(__file__).parent / "dashboard" / "city_photos.json"
+# Short-lived weather forecast cache, TTL managed by enrichments.py.
+WEATHER_CACHE_PATH = Path(__file__).parent / "dashboard" / "weather.json"
 
 # Force prospects-mode fallback even when Ryanair would be reachable.
 # Useful for offline/sandbox runs.
@@ -1308,6 +1313,21 @@ def _run() -> int:
         )
     except Exception as e:
         print(f"  [history] error: {e}", file=sys.stderr)
+
+    # Destination enrichments: Wikipedia thumbnails + open-meteo weather
+    # forecast. Both are best-effort: any network failure logs a warning
+    # and falls through with the deal unannotated. Photos are cached
+    # permanently; weather has a 12h TTL.
+    try:
+        from enrichments import enrich_photos, enrich_weather
+        enrich_photos(deals, PHOTO_CACHE_PATH, _http_get)
+    except Exception as e:
+        print(f"  [photos] error: {e}", file=sys.stderr)
+    try:
+        from enrichments import enrich_weather
+        enrich_weather(deals, WEATHER_CACHE_PATH, _http_get)
+    except Exception as e:
+        print(f"  [weather] error: {e}", file=sys.stderr)
 
     # Notify BEFORE we overwrite deals.json, so the notifier can compare
     # the new scan against the old file on disk. Wrapped in a bare try

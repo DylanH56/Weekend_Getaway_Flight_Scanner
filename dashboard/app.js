@@ -106,6 +106,13 @@ function renderDealCard(deal, idx) {
   const li = document.createElement("li");
   li.className = "deal";
   if (deal.is_lowest_ever) li.classList.add("lowest-ever");
+  if (deal.photo_url) {
+    li.classList.add("has-photo");
+    // Thumbnail rendered as a CSS background image. We set it inline
+    // so each card can have its own photo without bloating the
+    // stylesheet; the dark overlay keeps text readable.
+    li.style.backgroundImage = `url("${deal.photo_url}")`;
+  }
   li.dataset.idx = idx;
 
   const flightPrice = deal.flight_price_eur != null
@@ -172,6 +179,7 @@ function renderDealCard(deal, idx) {
       <span class="badge ${deal.origin.toLowerCase()}">${ORIGIN_LABEL[deal.origin]}</span>
       ${deal.carrier_code ? `<span class="badge carrier carrier-${deal.carrier_code.toLowerCase()}">${deal.carrier_code}</span>` : ""}
       ${deal.weekend_window_label ? `<span class="badge window">${deal.weekend_window_label}</span>` : ""}
+      ${deal.weather_emoji ? `<span class="weather-pill" title="${deal.weather_text || ""}">${deal.weather_emoji} ${deal.weather_high_c != null ? Math.round(deal.weather_high_c) + "&deg;" : ""}${deal.weather_low_c != null ? " / " + Math.round(deal.weather_low_c) + "&deg;" : ""}</span>` : ""}
       <span class="country">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span>
     </div>
     <div class="times">${timesHtml}</div>
