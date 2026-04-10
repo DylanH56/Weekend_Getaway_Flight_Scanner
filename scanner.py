@@ -343,18 +343,166 @@ _reject_counts: dict[str, int] = {
     "unknown_destination": 0,
 }
 
-# IATA -> (lat, lon) lookup built from EUROPE_ROUTES. Ryanair's
-# farfnd/v4 response no longer carries a `coordinates` field on the
-# arrival airport (confirmed via raw-fare dump in last_scan_log.txt
-# after commit 78b2dca), so we have to source the coordinates
-# ourselves. Anything not in this map comes through with lat/lon
-# null; the dashboard handles that by showing the deal card without a
-# map marker, and the `unknown_destination` reject counter lets us
-# see at a glance how much coverage we're missing.
+# Supplementary IATA -> (lat, lon) map for destinations Ryanair returns
+# that aren't in EUROPE_ROUTES. EUROPE_ROUTES is deliberately kept
+# small because prospects mode renders one card per (origin, dest,
+# weekend) and ballooning it 3x would make the prospects fallback
+# unusable. This extra lookup is *only* consulted from normalise_fare
+# during live scans, so adding destinations here doesn't bloat the
+# fallback at all. Coverage focus: the destinations we saw in the
+# `unknown_destination=194` reject bucket from run #12.
+_EXTRA_IATA_COORDS: dict[str, tuple[float, float]] = {
+    # --- Spain / Canaries / Balearics ---
+    "SVQ": (37.4180, -5.8931),     # Seville
+    "VLC": (39.4893, -0.4816),     # Valencia
+    "BIO": (43.3011, -2.9106),     # Bilbao
+    "SDR": (43.4271, -3.8200),     # Santander
+    "IBZ": (38.8729, 1.3731),      # Ibiza
+    "PMI": (39.5517, 2.7388),      # Palma de Mallorca
+    "MAH": (39.8626, 4.2187),      # Menorca
+    "TFS": (28.0445, -16.5725),    # Tenerife South
+    "TFN": (28.4827, -16.3415),    # Tenerife North
+    "LPA": (27.9319, -15.3866),    # Gran Canaria
+    "FUE": (28.4527, -13.8638),    # Fuerteventura
+    "REU": (41.1474, 1.1672),      # Reus (Tarragona / Costa Dorada)
+    "XRY": (36.7446, -6.0601),     # Jerez
+    # --- Italy ---
+    "CAG": (39.2515, 9.0543),      # Cagliari
+    "OLB": (40.8987, 9.5176),      # Olbia (Sardinia)
+    "AHO": (40.6321, 8.2908),      # Alghero
+    "PMO": (38.1759, 13.0910),     # Palermo
+    "CTA": (37.4668, 15.0664),     # Catania
+    "TRN": (45.2008, 7.6496),      # Turin
+    "PSR": (42.4317, 14.1811),     # Pescara
+    "BRI": (41.1389, 16.7606),     # Bari
+    "BDS": (40.6576, 17.9470),     # Brindisi
+    "TRS": (45.8275, 13.4722),     # Trieste
+    "VRN": (45.3957, 10.8885),     # Verona
+    "AOI": (43.6163, 13.3623),     # Ancona
+    "GOA": (44.4134, 8.8374),      # Genoa
+    # --- France ---
+    "NCE": (43.6584, 7.2158),      # Nice
+    "MRS": (43.4367, 5.2148),      # Marseille
+    "TLS": (43.6293, 1.3638),      # Toulouse
+    "BOD": (44.8283, -0.7156),     # Bordeaux
+    "BIQ": (43.4683, -1.5311),     # Biarritz
+    "LIL": (50.5633, 3.0894),      # Lille
+    "NTE": (47.1569, -1.6078),     # Nantes
+    "LYS": (45.7256, 5.0811),      # Lyon
+    "MPL": (43.5762, 3.9630),      # Montpellier
+    "PGF": (42.7404, 2.8706),      # Perpignan
+    "CCF": (43.2160, 2.3063),      # Carcassonne
+    "BVE": (45.1508, 1.4697),      # Brive
+    "RDZ": (44.4079, 2.4827),      # Rodez
+    # --- Germany / Austria / Switzerland ---
+    "HHN": (49.9487, 7.2639),      # Frankfurt Hahn
+    "NRN": (51.6025, 6.1422),      # Weeze (Düsseldorf area)
+    "BSL": (47.5896, 7.5299),      # EuroAirport Basel
+    "MLH": (47.5896, 7.5299),      # Same airport, French IATA
+    # --- Belgium / Netherlands / Luxembourg ---
+    "EIN": (51.4500, 5.3747),      # Eindhoven
+    "LUX": (49.6233, 6.2044),      # Luxembourg
+    "MST": (50.9117, 5.7704),      # Maastricht
+    # --- UK / Ireland ---
+    "BHX": (52.4539, -1.7480),     # Birmingham (already in DUB list, dedup is fine)
+    "CWL": (51.3967, -3.3432),     # Cardiff
+    "LBA": (53.8659, -1.6606),     # Leeds Bradford
+    "NCL": (55.0375, -1.6916),     # Newcastle
+    "EMA": (52.8311, -1.3281),     # East Midlands
+    "BOH": (50.7800, -1.8425),     # Bournemouth
+    "NWI": (52.6758, 1.2828),      # Norwich
+    "EXT": (50.7344, -3.4139),     # Exeter
+    "SNN": (52.7020, -8.9249),     # Shannon (self, for map anchor)
+    "DUB": (53.4213, -6.2700),     # Dublin (self, for map anchor)
+    "KIR": (52.1809, -9.5238),     # Kerry
+    "ORK": (51.8413, -8.4911),     # Cork
+    "IOM": (54.0833, -4.6239),     # Isle of Man
+    # --- Poland extras ---
+    "WMI": (52.4511, 20.6518),     # Warsaw Modlin
+    "POZ": (52.4210, 16.8263),     # Poznan
+    "KTW": (50.4743, 19.0800),     # Katowice
+    "LUZ": (51.2403, 22.7136),     # Lublin
+    "RZE": (50.1100, 22.0190),     # Rzeszow
+    "SZZ": (53.5847, 14.9022),     # Szczecin
+    "BZG": (53.0968, 17.9777),     # Bydgoszcz
+    # --- Czech / Slovakia / Hungary ---
+    "BTS": (48.1702, 17.2127),     # Bratislava
+    "BRQ": (49.1513, 16.6944),     # Brno
+    "OSR": (49.6963, 18.1111),     # Ostrava
+    "DEB": (47.4889, 21.6153),     # Debrecen
+    # --- Croatia / Slovenia / Balkans ---
+    "ZAG": (45.7429, 16.0688),     # Zagreb
+    "ZAD": (44.1083, 15.3467),     # Zadar
+    "PUY": (44.8935, 13.9222),     # Pula
+    "SPU": (43.5389, 16.2980),     # Split
+    "DBV": (42.5614, 18.2682),     # Dubrovnik
+    "LJU": (46.2237, 14.4576),     # Ljubljana
+    "SJJ": (43.8247, 18.3315),     # Sarajevo
+    "BEG": (44.8184, 20.3091),     # Belgrade
+    "SKP": (41.9616, 21.6214),     # Skopje
+    "TIA": (41.4147, 19.7206),     # Tirana
+    "TGD": (42.3594, 19.2519),     # Podgorica
+    # --- Greece ---
+    "ATH": (37.9364, 23.9445),     # Athens
+    "SKG": (40.5197, 22.9709),     # Thessaloniki
+    "CHQ": (35.5317, 24.1497),     # Chania
+    "HER": (35.3397, 25.1803),     # Heraklion
+    "RHO": (36.4054, 28.0862),     # Rhodes
+    "KGS": (36.7933, 27.0917),     # Kos
+    "JTR": (36.3992, 25.4793),     # Santorini
+    "JMK": (37.4351, 25.3481),     # Mykonos
+    "KLX": (37.6818, 21.2955),     # Kalamata
+    "PVK": (38.9254, 20.7653),     # Preveza
+    "CFU": (39.6018, 19.9118),     # Corfu
+    # --- Nordic ---
+    "OSL": (60.1939, 11.1004),     # Oslo Gardermoen
+    "TRF": (59.1867, 10.2586),     # Sandefjord Torp (Oslo area)
+    "NYO": (58.7886, 16.9122),     # Stockholm Skavsta
+    "GOT": (57.6686, 12.2950),     # Gothenburg
+    "HEL": (60.3172, 24.9633),     # Helsinki
+    "BLL": (55.7403, 9.1518),      # Billund
+    "AAL": (57.0928, 9.8492),      # Aalborg
+    # --- Baltic ---
+    "RIX": (56.9236, 23.9711),     # Riga
+    "VNO": (54.6341, 25.2858),     # Vilnius
+    "KUN": (54.9639, 24.0848),     # Kaunas
+    "TLL": (59.4133, 24.8328),     # Tallinn
+    # --- Morocco / Israel / Other ---
+    "RAK": (31.6069, -8.0363),     # Marrakesh
+    "FEZ": (33.9272, -4.9781),     # Fez
+    "AGA": (30.3250, -9.4131),     # Agadir
+    "TNG": (35.7269, -5.9168),     # Tangier
+    "NDR": (34.9888, -3.0282),     # Nador
+    # --- Portugal ---
+    "FNC": (32.6979, -16.7745),    # Madeira (Funchal)
+    "PDL": (37.7412, -25.6979),    # Ponta Delgada (Azores)
+    "TER": (38.7593, -27.0908),    # Terceira (Azores)
+    # --- Cyprus / Malta ---
+    "LCA": (34.8751, 33.6249),     # Larnaca
+    "PFO": (34.7180, 32.4857),     # Paphos
+    # --- Romania / Bulgaria ---
+    "OTP": (44.5711, 26.0858),     # Bucharest Otopeni
+    "CLJ": (46.7852, 23.6862),     # Cluj-Napoca
+    "TSR": (45.8098, 21.3379),     # Timisoara
+    "IAS": (47.1785, 27.6205),     # Iasi
+    "SOF": (42.6952, 23.4114),     # Sofia
+    "BOJ": (42.5696, 27.5152),     # Burgas
+    "VAR": (43.2321, 27.8251),     # Varna
+}
+
+# IATA -> (lat, lon) lookup combining EUROPE_ROUTES (for prospects
+# mode + live) with _EXTRA_IATA_COORDS (live only). Ryanair's farfnd/v4
+# response no longer carries a `coordinates` field on the arrival
+# airport, so we source them ourselves. Anything not in this combined
+# map comes through with lat/lon null; the dashboard renders those
+# deals in the sidebar but skips the map marker, and the
+# `unknown_destination` reject counter tracks how many we're missing.
 _IATA_COORDS: dict[str, tuple[float, float]] = {}
 for _origin_routes in EUROPE_ROUTES.values():
     for _iata, _city, _country, _lat, _lon in _origin_routes:
         _IATA_COORDS.setdefault(_iata, (_lat, _lon))
+for _iata, _latlon in _EXTRA_IATA_COORDS.items():
+    _IATA_COORDS.setdefault(_iata, _latlon)
 
 
 def _city_name(airport: dict) -> str:
