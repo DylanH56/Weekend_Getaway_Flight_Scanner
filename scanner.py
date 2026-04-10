@@ -38,7 +38,7 @@ PRICE_CAP_EUR = 100.0
 # Approx Limerick <-> Dublin return via Bus Eireann / Citylink / Dublin Coach.
 BUS_RETURN_COST_EUR = 30.0
 ORIGINS = ["SNN", "DUB"]  # Shannon first, Dublin as fallback.
-WEEKENDS_AHEAD = 16       # Scan ~4 months of upcoming weekends.
+WEEKENDS_AHEAD = 26       # Scan ~6 months of upcoming weekends (live mode).
 
 # European destinations to include. Kiwi accepts a comma-separated list
 # of 2-letter country codes as `fly_to`. Ireland is excluded.
@@ -63,8 +63,10 @@ API_KEY = os.environ.get("KIWI_API_KEY", "").strip()
 OUTPUT_PATH = Path(__file__).parent / "dashboard" / "deals.json"
 
 # How many upcoming weekends to generate prospect links for when we
-# have no API key and can only act as a route catalogue.
-PROSPECTS_WEEKENDS = 4
+# have no API key and can only act as a route catalogue. Kept smaller
+# than the live-mode window because prospects mode has no price filter
+# and the card count is `routes x weekends`, which balloons fast.
+PROSPECTS_WEEKENDS = 8
 
 # Verified direct routes to Europe from Shannon and Dublin (Ryanair /
 # Aer Lingus / easyJet as of recent schedules). Used for "prospects"
@@ -251,6 +253,18 @@ def normalise_fare(item: dict, origin: str) -> dict | None:
     if not out_dep or not in_dep:
         return None
 
+    # Belt-and-braces: reject anything outside the Fri-evening /
+    # Sun-afternoon-evening windows even if Kiwi returned it. This is
+    # what the previous sandbox experiment tripped on: a 09:20 morning
+    # flight was not a "Friday evening getaway" no matter what the API
+    # said. Compare on the HH:MM slice of the ISO local_departure.
+    out_hhmm = out_dep[11:16]  # "YYYY-MM-DDTHH:MM:SS" -> "HH:MM"
+    in_hhmm = in_dep[11:16]
+    if not (OUTBOUND_FROM <= out_hhmm <= OUTBOUND_TO):
+        return None
+    if not (INBOUND_FROM <= in_hhmm <= INBOUND_TO):
+        return None
+
     out_date = out_dep[:10]
     in_date = in_dep[:10]
 
@@ -280,12 +294,25 @@ def normalise_fare(item: dict, origin: str) -> dict | None:
 
 
 # ---------- Prospects mode (no API key) ----------
+PROSPECTS_TIME_NOTE = (
+    "Link opens ALL flights for these dates -- Google Flights / "
+    "Skyscanner URL schemes can't encode a time-of-day filter. "
+    "Filter for departures after 16:00 (Fri) and 15:00 (Sun) yourself."
+)
+
+
 def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
     """Every known route x every upcoming weekend, with NO price data.
 
     Used as an honest fallback when we don't have a Kiwi API key: we
     can't claim to know fares, so we produce click-through cards that
     open Google Flights / Skyscanner for the user to check live prices.
+
+    IMPORTANT: prospects mode CANNOT enforce the Fri-evening / Sun-evening
+    time window -- neither Google Flights' `?q=` scheme nor Skyscanner's
+    URL scheme accepts a departure-time filter. Each entry carries a
+    `time_window_note` so the dashboard can warn the user; the actual
+    filtering has to happen on the destination site.
     """
     entries: list[dict] = []
     for origin, routes in EUROPE_ROUTES.items():
@@ -309,6 +336,7 @@ def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
                     "inbound_departure": f"{sunday.isoformat()}T19:00:00",
                     "inbound_arrival": "",
                     "inbound_flight_number": "",
+                    "time_window_note": PROSPECTS_TIME_NOTE,
                     "google_flights_url": google_flights_url(
                         origin, iata, friday.isoformat(), sunday.isoformat()
                     ),

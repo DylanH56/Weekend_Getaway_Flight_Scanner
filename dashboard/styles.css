@@ -240,6 +240,22 @@ main {
   font-weight: 600;
 }
 
+.times .muted {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.deal .warn {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(250, 204, 21, .08);
+  border: 1px solid rgba(250, 204, 21, .3);
+  border-radius: 6px;
+  font-size: 11px;
+  color: #fde68a;
+  line-height: 1.35;
+}
+
 .book-row {
   display: flex;
   gap: 8px;

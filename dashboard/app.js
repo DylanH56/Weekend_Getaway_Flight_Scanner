@@ -119,9 +119,13 @@ function renderDealCard(deal, idx) {
       <div><span class="label">RET</span> ${fmtDateTime(deal.inbound_departure)} &rarr; ${fmtDateTime(deal.inbound_arrival)} &middot; ${deal.inbound_flight_number || ""}</div>
     `
     : `
-      <div><span class="label">OUT</span> ${fmtDate(deal.outbound_departure)} evening</div>
-      <div><span class="label">RET</span> ${fmtDate(deal.inbound_departure)} evening</div>
+      <div><span class="label">OUT</span> ${fmtDate(deal.outbound_departure)} evening <span class="muted">(target 16:00+)</span></div>
+      <div><span class="label">RET</span> ${fmtDate(deal.inbound_departure)} evening <span class="muted">(target 15:00+)</span></div>
     `;
+
+  const warnHtml = deal.time_window_note
+    ? `<div class="warn">&#9888; Filter for evening departures on the booking site &mdash; the link can't do it for you.</div>`
+    : "";
 
   li.innerHTML = `
     <div class="top">
@@ -139,6 +143,7 @@ function renderDealCard(deal, idx) {
       <span class="country">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span>
     </div>
     <div class="times">${timesHtml}</div>
+    ${warnHtml}
     <div class="book-row">
       <a class="book book-google" href="${deal.google_flights_url}" target="_blank" rel="noopener">Google Flights &rarr;</a>
       <a class="book book-sky" href="${deal.skyscanner_url}" target="_blank" rel="noopener">Skyscanner &rarr;</a>
@@ -169,9 +174,9 @@ async function main() {
   if (payload.mode === "prospects") {
     metaEl.innerHTML =
       `<b>Prospects mode</b> &middot; ` +
-      `<b>${payload.deals.length}</b> route/weekend combos &middot; ` +
-      `no live prices &mdash; click a link to check &middot; ` +
-      `set <code>KIWI_API_KEY</code> for auto-filtering under &euro;${payload.price_cap_eur}`;
+      `<b>${payload.deals.length}</b> route/weekend combos over ${payload.weekends_scanned} weekends &middot; ` +
+      `no live prices or time filter &mdash; click through to check &middot; ` +
+      `set <code>KIWI_API_KEY</code> for auto-filtering under &euro;${payload.price_cap_eur} over ~6 months`;
   } else {
     metaEl.innerHTML =
       `Last scanned <b>${generated}</b> &middot; ` +
