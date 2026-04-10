@@ -1,32 +1,37 @@
-# Scheduled scan + GitHub Pages deploy for the weekend getaway dashboard.
+# Scheduled scan + (optional) GitHub Pages deploy.
 #
-# Triggers on a 6-hourly cron, on pushes to main that touch the scanner
-# or dashboard, and on manual dispatch. Each run:
-#   1. Installs Python deps.
-#   2. Runs scanner.py. It hits Ryanair's public fare-finder endpoint
-#      (no API key, no signup). If every Ryanair call fails, it falls
-#      back to the route-catalogue prospects mode so the workflow
-#      still produces something useful.
-#   3. If NOTIFY_DISCORD_WEBHOOK_URL is configured, posts a Discord
-#      message for every deal that is now <= EUR NOTIFY_PRICE_CAP_EUR
-#      (default 80) but wasn't under that cap in the previous scan.
-#   4. Commits the updated deals.json back to main (only if it actually
-#      changed, and with [skip ci] so this doesn't loop).
-#   5. Publishes the `dashboard/` folder to GitHub Pages.
+# Split into two jobs on purpose:
+#
+#   scan    - checks out, runs scanner.py, commits the refreshed
+#             deals.json, and uploads the dashboard/ directory as a
+#             Pages artifact. NO `environment:` block, so a Pages
+#             failure downstream can't take the scan job red.
+#
+#   deploy  - needs: scan. Runs configure-pages + deploy-pages in
+#             its own job with the github-pages environment. If
+#             Pages isn't enabled on the repo, this job goes yellow
+#             (continue-on-error) but the scan job stays green and
+#             deals.json still gets committed.
 #
 # One-time setup required from you (can't be done from code):
-#   A. Settings -> Pages -> Source: "GitHub Actions".
-#   B. Merge this branch to main (or the workflow never fires on schedule).
-#   C. Actions tab -> "Scan flights and deploy dashboard" -> Run workflow
-#      to trigger the first run immediately instead of waiting for cron.
+#   A. Settings -> Pages -> Source: "GitHub Actions". The default
+#      GITHUB_TOKEN isn't allowed to create Pages sites via the REST
+#      API even with pages:write -- the site has to exist before
+#      actions/deploy-pages can push to it. Click this once and
+#      you're done.
+#   B. Merge this branch to main (or the workflow never fires on
+#      schedule -- cron only respects the default branch).
+#   C. Actions tab -> "Scan flights and deploy dashboard" -> Run
+#      workflow to trigger the first run immediately instead of
+#      waiting for cron.
 #   D. (Optional, for phone alerts) Create a Discord webhook in any
 #      server you control (Server Settings -> Integrations -> Webhooks
 #      -> New Webhook -> Copy Webhook URL) and add it as a repo secret
-#      named NOTIFY_DISCORD_WEBHOOK_URL. To change the alert threshold,
-#      set a repo variable NOTIFY_PRICE_CAP_EUR (default is 80).
+#      named NOTIFY_DISCORD_WEBHOOK_URL. To change the alert threshold
+#      from the EUR 80 default, set a repo variable NOTIFY_PRICE_CAP_EUR.
 #
-# After that it runs itself. The Pages URL appears on the workflow run
-# summary -- bookmark it. Discord notifications are optional.
+# After that it runs itself on a 6-hour cadence. The Pages URL appears
+# on every deploy job's run summary -- bookmark it.
 
 name: Scan flights and deploy dashboard
 
@@ -39,6 +44,7 @@ on:
     branches: [main]
     paths:
       - 'scanner.py'
+      - 'notifier.py'
       - 'requirements.txt'
       - 'dashboard/index.html'
       - 'dashboard/app.js'
@@ -51,11 +57,6 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: write   # to commit deals.json
-  pages: write      # to deploy Pages
-  id-token: write   # to authenticate the Pages deploy
-
 # Let a new run cancel a stale deploy, but never cancel an in-progress
 # deploy itself -- that can leave Pages in a half-updated state.
 concurrency:
@@ -63,11 +64,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  scan-and-deploy:
+  scan:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: write  # for the deals.json commit-and-push
 
     steps:
       - name: Checkout
@@ -75,7 +75,7 @@ jobs:
         with:
           # Full history so the pull-rebase-retry in the commit step has
           # enough to rebase our deals.json commit onto if the push race
-          # kicks in.
+          # with a concurrent push kicks in.
           fetch-depth: 0
 
       - name: Set up Python
@@ -102,9 +102,9 @@ jobs:
           fi
 
       - name: Commit refreshed deals.json (if changed)
-        # Non-fatal: a lost race on the push (remote moved forward while we
-        # were scanning) shouldn't stop the Pages deploy from going out with
-        # a freshly-generated dashboard.
+        if: github.event.inputs.test_notification != 'true'
+        # Non-fatal: a lost race on the push shouldn't stop the Pages
+        # artifact upload from happening with a freshly-generated dashboard.
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -118,10 +118,6 @@ jobs:
           git commit -m "chore: refresh deals.json [skip ci]"
 
           branch="${GITHUB_REF_NAME}"
-          # Attempt fast-forward push first; if the remote has moved ahead,
-          # pull --rebase --autostash to re-apply our single deals.json
-          # commit on top, then push once more. If that still loses, give up
-          # and let the next scheduled run retry with a fresh scan.
           if git push origin "HEAD:${branch}"; then
             echo "Fast-forward push succeeded."
             exit 0
@@ -138,26 +134,37 @@ jobs:
           echo "::warning::Push still rejected after rebase; skipping commit this run."
           exit 0
 
-      - name: Configure GitHub Pages
-        if: always() && github.event.inputs.test_notification != 'true'
-        id: configure_pages
-        continue-on-error: true
-        uses: actions/configure-pages@v5
-        with:
-          # Auto-enable Pages on the repo if it isn't already. Needs
-          # the repo to be public on the free tier; "Not Found" here
-          # means the repo is still private or some other enablement
-          # precondition failed. Without this flag the action requires
-          # a manual Settings -> Pages -> Source: GitHub Actions click.
-          enablement: true
-
       - name: Upload dashboard as Pages artifact
-        if: always() && steps.configure_pages.outcome == 'success'
+        if: github.event.inputs.test_notification != 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dashboard
 
+  deploy:
+    needs: scan
+    # Skip the Pages deploy entirely in test-notification mode -- nothing
+    # to publish, and we don't want to re-deploy the dashboard just for a
+    # webhook test.
+    if: github.event.inputs.test_notification != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write     # deploy-pages needs this
+      id-token: write  # for OIDC auth to GitHub Pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    # The whole job is non-fatal. If Pages hasn't been enabled in repo
+    # Settings yet, every step here will fail/skip cleanly but the
+    # workflow as a whole still shows the scan job as green success.
+    continue-on-error: true
+
+    steps:
+      - name: Configure GitHub Pages
+        id: configure_pages
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+
       - name: Deploy to GitHub Pages
-        if: always() && steps.configure_pages.outcome == 'success'
+        if: steps.configure_pages.outcome == 'success'
         id: deploy
         uses: actions/deploy-pages@v4
