@@ -1473,7 +1473,7 @@ def _clear_scan_watchdog() -> None:
 # shows behaviour that doesn't match this ID's claimed features,
 # the runner is executing stale code. Look for this exact string
 # in the log to know which build is live.
-SCANNER_BUILD_ID = "build-2026-04-10.7 (SIGALRM=BaseException, enrich progress, AL=3w)"
+SCANNER_BUILD_ID = "build-2026-04-10.8 (enrich budget=90s, AL=3w, SIGALRM=600s)"
 
 
 def _run() -> int:
@@ -1751,18 +1751,56 @@ def _run_impl() -> int:
     # has a hard 8s wall-clock cap and cannot trigger the plain-requests
     # fallback. Failures are caught by the enrichment modules' own
     # try/except blocks and fall through with the deal unannotated.
+    # Destination enrichments: Wikipedia thumbnails + open-meteo weather
+    # forecast. Both are best-effort: any network failure logs a warning
+    # and falls through with the deal unannotated. Photos are cached
+    # permanently; weather has a 12h TTL.
+    #
+    # These are routed through the watchdog wrapper with a HARD TOTAL
+    # BUDGET of ENRICHMENT_BUDGET_SECONDS. Rationale:
+    #   * Photos only need ~30 HTTP calls (one per unique destination).
+    #     At ~0.5s per call, photos finish in ~15s even cold-cache.
+    #   * Weather caches by (iata, out_date, in_date) and deduplicates
+    #     at that level. With 4 windows x 26 weekends x ~30 unique
+    #     destinations = ~3120 unique tuples, a cold-cache weather
+    #     enrichment would need ~26 minutes even with healthy plain
+    #     requests. That's unacceptable given our 10-minute top-level
+    #     watchdog.
+    #   * So we cap the TOTAL enrichment phase at 90 seconds. Once the
+    #     budget is blown, every subsequent _enrichment_http_get call
+    #     raises immediately, each enrichment module's own try/except
+    #     catches it, and the deal falls through unannotated. Deals
+    #     already enriched keep their data.
+    #
+    # allow_plain_fallback=True for enrichment (unlike Aer Lingus):
+    # Wikipedia and open-meteo both work fine with plain requests.
+    # The previous hang I diagnosed was only on Aer Lingus's Cloudflare
+    # layer; enrichment plain-requests calls are safe and fast.
+    ENRICHMENT_BUDGET_SECONDS = 90.0
+    enrichment_start = time.time()
+    enrichment_skipped = {"count": 0}
+
     def _enrichment_http_get(url, **kwargs):
+        elapsed = time.time() - enrichment_start
+        if elapsed > ENRICHMENT_BUDGET_SECONDS:
+            enrichment_skipped["count"] += 1
+            raise TimeoutError(
+                f"enrichment budget {ENRICHMENT_BUDGET_SECONDS:.0f}s exceeded "
+                f"({elapsed:.0f}s elapsed); skipping this call"
+            )
         return _http_get_with_watchdog(
             url,
             watchdog_seconds=8.0,
-            allow_plain_fallback=False,
+            # Enrichment endpoints (Wikipedia, open-meteo) work fine
+            # with plain requests, so we DO allow the fallback here
+            # (unlike Aer Lingus which must keep curl_cffi).
             **kwargs,
         )
 
-    enrichment_start = time.time()
     print(
         f"  [enrich] starting photo + weather enrichment "
-        f"(curl_cffi_available={_CURL_CFFI_AVAILABLE}, {len(deals)} deals)...",
+        f"(curl_cffi_available={_CURL_CFFI_AVAILABLE}, {len(deals)} deals, "
+        f"budget={ENRICHMENT_BUDGET_SECONDS:.0f}s)...",
         file=sys.stderr,
     )
     try:
@@ -1785,11 +1823,19 @@ def _run_impl() -> int:
         )
     except Exception as e:
         print(f"  [weather] error: {e}", file=sys.stderr)
-    print(
-        f"  [enrich] total enrichment time: "
-        f"{time.time() - enrichment_start:.1f}s",
-        file=sys.stderr,
-    )
+    enrichment_total = time.time() - enrichment_start
+    if enrichment_skipped["count"] > 0:
+        print(
+            f"  [enrich] total time: {enrichment_total:.1f}s "
+            f"({enrichment_skipped['count']} calls skipped due to budget)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"  [enrich] total time: {enrichment_total:.1f}s "
+            f"(all calls completed within budget)",
+            file=sys.stderr,
+        )
 
     # Notify BEFORE we overwrite deals.json, so the notifier can compare
     # the new scan against the old file on disk. Wrapped in a bare try
