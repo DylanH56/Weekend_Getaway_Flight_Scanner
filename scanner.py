@@ -62,6 +62,83 @@ API_KEY = os.environ.get("KIWI_API_KEY", "").strip()
 
 OUTPUT_PATH = Path(__file__).parent / "dashboard" / "deals.json"
 
+# How many upcoming weekends to generate prospect links for when we
+# have no API key and can only act as a route catalogue.
+PROSPECTS_WEEKENDS = 4
+
+# Verified direct routes to Europe from Shannon and Dublin (Ryanair /
+# Aer Lingus / easyJet as of recent schedules). Used for "prospects"
+# mode when no Kiwi API key is available -- every (origin, dest)
+# entry becomes a click-through card to Google Flights / Skyscanner.
+# Prices are intentionally NOT included; follow the links to check live.
+EUROPE_ROUTES: dict[str, list[tuple[str, str, str, float, float]]] = {
+    "SNN": [
+        ("STN", "London Stansted",   "United Kingdom", 51.8860,  0.2389),
+        ("LHR", "London Heathrow",   "United Kingdom", 51.4700, -0.4543),
+        ("MAN", "Manchester",        "United Kingdom", 53.3537, -2.2750),
+        ("EDI", "Edinburgh",         "United Kingdom", 55.9500, -3.3725),
+        ("LPL", "Liverpool",         "United Kingdom", 53.3336, -2.8497),
+        ("ALC", "Alicante",          "Spain",          38.2822, -0.5582),
+        ("AGP", "Malaga",            "Spain",          36.6749, -4.4991),
+        ("FAO", "Faro",              "Portugal",       37.0144, -7.9659),
+        ("ACE", "Lanzarote",         "Spain",          28.9455, -13.6052),
+    ],
+    "DUB": [
+        # UK
+        ("STN", "London Stansted",   "United Kingdom", 51.8860,  0.2389),
+        ("LGW", "London Gatwick",    "United Kingdom", 51.1537, -0.1821),
+        ("LHR", "London Heathrow",   "United Kingdom", 51.4700, -0.4543),
+        ("LTN", "London Luton",      "United Kingdom", 51.8747, -0.3683),
+        ("MAN", "Manchester",        "United Kingdom", 53.3537, -2.2750),
+        ("EDI", "Edinburgh",         "United Kingdom", 55.9500, -3.3725),
+        ("GLA", "Glasgow",           "United Kingdom", 55.8719, -4.4331),
+        ("BHX", "Birmingham",        "United Kingdom", 52.4539, -1.7480),
+        ("BRS", "Bristol",           "United Kingdom", 51.3827, -2.7191),
+        # Benelux / France / Germany
+        ("AMS", "Amsterdam",         "Netherlands",    52.3086,  4.7639),
+        ("BRU", "Brussels",          "Belgium",        50.9014,  4.4844),
+        ("CRL", "Brussels Charleroi","Belgium",        50.4592,  4.4538),
+        ("CDG", "Paris CDG",         "France",         49.0097,  2.5479),
+        ("BVA", "Paris Beauvais",    "France",         49.4544,  2.1128),
+        ("FRA", "Frankfurt",         "Germany",        50.0379,  8.5622),
+        ("BER", "Berlin",            "Germany",        52.3667, 13.5033),
+        ("MUC", "Munich",            "Germany",        48.3538, 11.7861),
+        ("HAM", "Hamburg",           "Germany",        53.6304,  9.9882),
+        # Iberia
+        ("BCN", "Barcelona",         "Spain",          41.2974,  2.0833),
+        ("GRO", "Girona",            "Spain",          41.9010,  2.7605),
+        ("MAD", "Madrid",            "Spain",          40.4936, -3.5668),
+        ("ALC", "Alicante",          "Spain",          38.2822, -0.5582),
+        ("AGP", "Malaga",            "Spain",          36.6749, -4.4991),
+        ("LIS", "Lisbon",            "Portugal",       38.7742, -9.1342),
+        ("OPO", "Porto",             "Portugal",       41.2481, -8.6814),
+        ("FAO", "Faro",              "Portugal",       37.0144, -7.9659),
+        # Italy
+        ("FCO", "Rome Fiumicino",    "Italy",          41.8003, 12.2389),
+        ("CIA", "Rome Ciampino",     "Italy",          41.7994, 12.5949),
+        ("MXP", "Milan Malpensa",    "Italy",          45.6306,  8.7281),
+        ("BGY", "Milan Bergamo",     "Italy",          45.6739,  9.7042),
+        ("NAP", "Naples",            "Italy",          40.8860, 14.2908),
+        ("BLQ", "Bologna",           "Italy",          44.5354, 11.2887),
+        ("VCE", "Venice",            "Italy",          45.5053, 12.3519),
+        ("PSA", "Pisa",              "Italy",          43.6839, 10.3927),
+        # Central / Eastern Europe
+        ("PRG", "Prague",            "Czechia",        50.1008, 14.2600),
+        ("VIE", "Vienna",            "Austria",        48.1103, 16.5697),
+        ("BUD", "Budapest",          "Hungary",        47.4369, 19.2556),
+        ("KRK", "Krakow",            "Poland",         50.0777, 19.7848),
+        ("WAW", "Warsaw",            "Poland",         52.1657, 20.9671),
+        ("WRO", "Wroclaw",           "Poland",         51.1027, 16.8858),
+        ("GDN", "Gdansk",            "Poland",         54.3776, 18.4662),
+        # Nordics / Switzerland / Mediterranean
+        ("CPH", "Copenhagen",        "Denmark",        55.6180, 12.6561),
+        ("ARN", "Stockholm Arlanda", "Sweden",         59.6519, 17.9186),
+        ("ZRH", "Zurich",            "Switzerland",    47.4647,  8.5492),
+        ("GVA", "Geneva",            "Switzerland",    46.2381,  6.1089),
+        ("MLA", "Malta",             "Malta",          35.8575, 14.4775),
+    ],
+}
+
 
 # ---------- Date helpers ----------
 def next_weekends(n: int) -> Iterator[tuple[dt.date, dt.date]]:
@@ -202,18 +279,87 @@ def normalise_fare(item: dict, origin: str) -> dict | None:
     }
 
 
+# ---------- Prospects mode (no API key) ----------
+def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
+    """Every known route x every upcoming weekend, with NO price data.
+
+    Used as an honest fallback when we don't have a Kiwi API key: we
+    can't claim to know fares, so we produce click-through cards that
+    open Google Flights / Skyscanner for the user to check live prices.
+    """
+    entries: list[dict] = []
+    for origin, routes in EUROPE_ROUTES.items():
+        bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
+        for iata, city, country, lat, lon in routes:
+            for friday, sunday in weekends:
+                entries.append({
+                    "origin": origin,
+                    "destination_iata": iata,
+                    "destination_city": city,
+                    "destination_country": country,
+                    "destination_lat": lat,
+                    "destination_lon": lon,
+                    "flight_price_eur": None,
+                    "bus_surcharge_eur": round(bus, 2),
+                    "effective_price_eur": None,
+                    "currency": "EUR",
+                    "outbound_departure": f"{friday.isoformat()}T18:00:00",
+                    "outbound_arrival": "",
+                    "outbound_flight_number": "",
+                    "inbound_departure": f"{sunday.isoformat()}T19:00:00",
+                    "inbound_arrival": "",
+                    "inbound_flight_number": "",
+                    "google_flights_url": google_flights_url(
+                        origin, iata, friday.isoformat(), sunday.isoformat()
+                    ),
+                    "skyscanner_url": skyscanner_url(
+                        origin, iata, friday.isoformat(), sunday.isoformat()
+                    ),
+                })
+    return entries
+
+
+def write_prospects_mode() -> int:
+    weekends = list(next_weekends(PROSPECTS_WEEKENDS))
+    entries = build_prospects(weekends)
+    # Sort: soonest weekend first, Shannon ahead of Dublin, then country/city.
+    entries.sort(key=lambda d: (
+        d["outbound_departure"][:10],
+        0 if d["origin"] == "SNN" else 1,
+        d["destination_country"],
+        d["destination_city"],
+    ))
+
+    payload = {
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "price_cap_eur": PRICE_CAP_EUR,
+        "bus_return_cost_eur": BUS_RETURN_COST_EUR,
+        "origins": list(EUROPE_ROUTES.keys()),
+        "weekends_scanned": len(weekends),
+        "mode": "prospects",
+        "source": "route-catalogue",
+        "deals": entries,
+    }
+
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.write_text(json.dumps(payload, indent=2))
+    print(
+        f"No KIWI_API_KEY set -- writing {len(entries)} route prospects "
+        f"({sum(len(v) for v in EUROPE_ROUTES.values())} routes x "
+        f"{len(weekends)} weekends) to {OUTPUT_PATH}.\n"
+        f"\n"
+        f"Click any Google Flights / Skyscanner link in the dashboard to "
+        f"see the live price. For automated under-EUR {PRICE_CAP_EUR:.0f} "
+        f"filtering, get a free key at https://tequila.kiwi.com and set "
+        f"KIWI_API_KEY."
+    )
+    return 0
+
+
 # ---------- Main ----------
 def main() -> int:
     if not API_KEY:
-        print(
-            "ERROR: KIWI_API_KEY environment variable is not set.\n"
-            "\n"
-            "Get a free Tequila API key at https://tequila.kiwi.com, then:\n"
-            "    export KIWI_API_KEY='your-key-here'\n"
-            "    python scanner.py\n",
-            file=sys.stderr,
-        )
-        return 1
+        return write_prospects_mode()
 
     all_deals: list[dict] = []
     weekends = list(next_weekends(WEEKENDS_AHEAD))
@@ -259,6 +405,7 @@ def main() -> int:
         "bus_return_cost_eur": BUS_RETURN_COST_EUR,
         "origins": ORIGINS,
         "weekends_scanned": len(weekends),
+        "mode": "live",
         "source": "kiwi-tequila",
         "deals": deals,
     }

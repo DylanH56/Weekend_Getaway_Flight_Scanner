@@ -191,6 +191,14 @@ main {
   line-height: 1;
 }
 
+.deal .price .price-check {
+  font-size: 13px;
+  font-weight: 600;
+  color: #38bdf8;
+  font-style: italic;
+  text-transform: lowercase;
+}
+
 .deal .price-note {
   font-size: 10px;
   color: #94a3b8;

@@ -30,14 +30,24 @@ function fmtDate(iso) {
 
 function sortDeals(deals, mode) {
   const copy = deals.slice();
+  const priceOr = (d) => (d.effective_price_eur == null ? Infinity : d.effective_price_eur);
   if (mode === "price") {
-    copy.sort((a, b) => a.effective_price_eur - b.effective_price_eur);
+    copy.sort((a, b) => {
+      const diff = priceOr(a) - priceOr(b);
+      return diff !== 0 ? diff : a.outbound_departure.localeCompare(b.outbound_departure);
+    });
   } else if (mode === "date") {
-    copy.sort((a, b) => a.outbound_departure.localeCompare(b.outbound_departure));
+    copy.sort((a, b) => {
+      const d = a.outbound_departure.localeCompare(b.outbound_departure);
+      if (d !== 0) return d;
+      // within a weekend, SNN before DUB, then cheapest or alphabetical
+      if (a.origin !== b.origin) return a.origin === "SNN" ? -1 : 1;
+      return (a.destination_city || "").localeCompare(b.destination_city || "");
+    });
   } else if (mode === "country") {
     copy.sort((a, b) => {
       const c = (a.destination_country || "").localeCompare(b.destination_country || "");
-      return c !== 0 ? c : a.effective_price_eur - b.effective_price_eur;
+      return c !== 0 ? c : priceOr(a) - priceOr(b);
     });
   }
   return copy;
@@ -90,10 +100,28 @@ function renderDealCard(deal, idx) {
   li.className = "deal";
   li.dataset.idx = idx;
 
-  const priceNote =
-    deal.origin === "SNN"
-      ? "direct from Shannon"
-      : `incl. &euro;${deal.bus_surcharge_eur.toFixed(0)} Limerick bus`;
+  const hasPrice = deal.effective_price_eur != null;
+  const priceDisplay = hasPrice
+    ? `&euro;${deal.effective_price_eur.toFixed(0)}`
+    : `<span class="price-check">check &rarr;</span>`;
+  const priceNote = hasPrice
+    ? (deal.origin === "SNN"
+        ? "direct from Shannon"
+        : `incl. &euro;${deal.bus_surcharge_eur.toFixed(0)} Limerick bus`)
+    : (deal.origin === "SNN"
+        ? "live price via link"
+        : `+&euro;${deal.bus_surcharge_eur.toFixed(0)} Limerick bus`);
+
+  const hasTimes = !!deal.outbound_arrival;
+  const timesHtml = hasTimes
+    ? `
+      <div><span class="label">OUT</span> ${fmtDateTime(deal.outbound_departure)} &rarr; ${fmtDateTime(deal.outbound_arrival)} &middot; ${deal.outbound_flight_number || ""}</div>
+      <div><span class="label">RET</span> ${fmtDateTime(deal.inbound_departure)} &rarr; ${fmtDateTime(deal.inbound_arrival)} &middot; ${deal.inbound_flight_number || ""}</div>
+    `
+    : `
+      <div><span class="label">OUT</span> ${fmtDate(deal.outbound_departure)} evening</div>
+      <div><span class="label">RET</span> ${fmtDate(deal.inbound_departure)} evening</div>
+    `;
 
   li.innerHTML = `
     <div class="top">
@@ -102,7 +130,7 @@ function renderDealCard(deal, idx) {
         <div class="country">${deal.destination_country || ""} &middot; ${deal.destination_iata}</div>
       </div>
       <div class="price-block">
-        <div class="price">&euro;${deal.effective_price_eur.toFixed(0)}</div>
+        <div class="price">${priceDisplay}</div>
         <div class="price-note">${priceNote}</div>
       </div>
     </div>
@@ -110,10 +138,7 @@ function renderDealCard(deal, idx) {
       <span class="badge ${deal.origin.toLowerCase()}">${ORIGIN_LABEL[deal.origin]}</span>
       <span class="country">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span>
     </div>
-    <div class="times">
-      <div><span class="label">OUT</span> ${fmtDateTime(deal.outbound_departure)} &rarr; ${fmtDateTime(deal.outbound_arrival)} &middot; ${deal.outbound_flight_number || ""}</div>
-      <div><span class="label">RET</span> ${fmtDateTime(deal.inbound_departure)} &rarr; ${fmtDateTime(deal.inbound_arrival)} &middot; ${deal.inbound_flight_number || ""}</div>
-    </div>
+    <div class="times">${timesHtml}</div>
     <div class="book-row">
       <a class="book book-google" href="${deal.google_flights_url}" target="_blank" rel="noopener">Google Flights &rarr;</a>
       <a class="book book-sky" href="${deal.skyscanner_url}" target="_blank" rel="noopener">Skyscanner &rarr;</a>
@@ -141,10 +166,18 @@ async function main() {
   const generated = payload.generated_at
     ? new Date(payload.generated_at).toLocaleString("en-IE")
     : "unknown";
-  metaEl.innerHTML =
-    `Last scanned <b>${generated}</b> &middot; ` +
-    `<b>${payload.deals.length}</b> deals &le; &euro;${payload.price_cap_eur} &middot; ` +
-    `Dublin bus fare &euro;${payload.bus_return_cost_eur}`;
+  if (payload.mode === "prospects") {
+    metaEl.innerHTML =
+      `<b>Prospects mode</b> &middot; ` +
+      `<b>${payload.deals.length}</b> route/weekend combos &middot; ` +
+      `no live prices &mdash; click a link to check &middot; ` +
+      `set <code>KIWI_API_KEY</code> for auto-filtering under &euro;${payload.price_cap_eur}`;
+  } else {
+    metaEl.innerHTML =
+      `Last scanned <b>${generated}</b> &middot; ` +
+      `<b>${payload.deals.length}</b> deals &le; &euro;${payload.price_cap_eur} &middot; ` +
+      `Dublin bus fare &euro;${payload.bus_return_cost_eur}`;
+  }
 
   const markers = new Map(); // idx -> Leaflet marker
   const cards = new Map(); // idx -> <li>
@@ -226,6 +259,12 @@ async function main() {
     if (bounds.length > 1) {
       map.fitBounds(bounds, { padding: [40, 40], maxZoom: 6 });
     }
+  }
+
+  // In prospects mode, default to sorting by date since prices are unknown.
+  if (payload.mode === "prospects") {
+    const sel = $("sort");
+    if (sel && sel.value === "price") sel.value = "date";
   }
 
   $("filter-snn").addEventListener("change", render);
