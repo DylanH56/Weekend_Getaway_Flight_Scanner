@@ -2,10 +2,13 @@
 """Weekend Getaway Flight Scanner.
 
 Scans Ryanair's public fare-finder API for cheap round-trip weekend
-flights (Fri evening out, Sun evening back) from Shannon (preferred)
-and Dublin into Europe, capped at EUR 100. Dublin fares are adjusted
-upward by the cost of a return Limerick<->Dublin bus so the two
-origins can be compared on an "effective price from Limerick" basis.
+flights (Fri evening out, Sun evening back) from Shannon, Dublin, and
+Birmingham into Europe, capped at EUR 150. Dublin fares carry an
+informational bus_surcharge_eur field reflecting the Limerick<->Dublin
+bus so the Irish-based user can compare SNN and DUB on an
+"effective price from Limerick" basis. Shannon and Birmingham
+surcharges are always 0 -- the user is assumed to already be at
+those airports.
 
 Ryanair's fare-finder endpoint is public, unauthenticated, and used
 by ryanair.com's own "fare finder" page. No API key. No signup. It
@@ -162,7 +165,13 @@ PRICE_CAP_EUR = 150.0
 # deal so the dashboard can display it if the user wants to see the
 # total door-to-door cost.
 BUS_RETURN_COST_EUR = 30.0
-ORIGINS = ["SNN", "DUB"]  # Shannon first, Dublin as fallback.
+# Origin airports scanned on every run. Order is just cosmetic (the
+# sort step later places Shannon first, then Dublin, then anything
+# else). Only DUB carries the bus_surcharge hint because the
+# Limerick<->Dublin bus is specific to the Irish-user-based-in-Limerick
+# case; users departing from SNN (already in Shannon) or BHX (already
+# in Birmingham) don't pay it.
+ORIGINS = ["SNN", "DUB", "BHX"]
 WEEKENDS_AHEAD = 26       # Scan ~6 months of upcoming weekends (live mode).
 
 # Friday evening departures and Sunday afternoon/evening returns.
@@ -295,6 +304,42 @@ EUROPE_ROUTES: dict[str, list[tuple[str, str, str, float, float]]] = {
         ("ZRH", "Zurich",            "Switzerland",    47.4647,  8.5492),
         ("GVA", "Geneva",            "Switzerland",    46.2381,  6.1089),
         ("MLA", "Malta",             "Malta",          35.8575, 14.4775),
+    ],
+    "BHX": [
+        # Ryanair direct-from-Birmingham highlights. Curated list,
+        # used ONLY for prospects-mode fallback when the live fare
+        # endpoint is unreachable. The live scan doesn't consult
+        # this list -- Ryanair's farfnd returns everything it sells.
+        # Iberia
+        ("ALC", "Alicante",          "Spain",          38.2822, -0.5582),
+        ("AGP", "Malaga",            "Spain",          36.6749, -4.4991),
+        ("BCN", "Barcelona",         "Spain",          41.2974,  2.0833),
+        ("MAD", "Madrid",            "Spain",          40.4936, -3.5668),
+        ("PMI", "Palma",             "Spain",          39.5517,  2.7388),
+        ("FAO", "Faro",              "Portugal",       37.0144, -7.9659),
+        ("LIS", "Lisbon",            "Portugal",       38.7742, -9.1342),
+        ("OPO", "Porto",             "Portugal",       41.2481, -8.6814),
+        # Italy
+        ("FCO", "Rome Fiumicino",    "Italy",          41.8003, 12.2389),
+        ("CIA", "Rome Ciampino",     "Italy",          41.7994, 12.5949),
+        ("BGY", "Milan Bergamo",     "Italy",          45.6739,  9.7042),
+        ("PSA", "Pisa",              "Italy",          43.6839, 10.3927),
+        ("BLQ", "Bologna",           "Italy",          44.5354, 11.2887),
+        ("NAP", "Naples",            "Italy",          40.8860, 14.2908),
+        ("VCE", "Venice",            "Italy",          45.5053, 12.3519),
+        # Central / Eastern Europe
+        ("PRG", "Prague",            "Czechia",        50.1008, 14.2600),
+        ("KRK", "Krakow",            "Poland",         50.0777, 19.7848),
+        ("WAW", "Warsaw",            "Poland",         52.1657, 20.9671),
+        ("BUD", "Budapest",          "Hungary",        47.4369, 19.2556),
+        ("VIE", "Vienna",            "Austria",        48.1103, 16.5697),
+        # Benelux / France / Germany
+        ("BVA", "Paris Beauvais",    "France",         49.4544,  2.1128),
+        ("BER", "Berlin",            "Germany",        52.3667, 13.5033),
+        # Mediterranean
+        ("MLA", "Malta",             "Malta",          35.8575, 14.4775),
+        # Ireland (yes, from Birmingham to Ireland)
+        ("DUB", "Dublin",            "Ireland",        53.4213, -6.2700),
     ],
 }
 
@@ -667,7 +712,9 @@ def _ryanair_normalise_fare(fare: dict, origin: str) -> dict | None:
 
     dest_iata = arr.get("iataCode", "")
     flight_price = float(summary.get("value", 0))
-    bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
+    # Bus surcharge is DUB-specific (Limerick<->Dublin return bus).
+    # SNN departs from Shannon, BHX from Birmingham -- neither pays.
+    bus = BUS_RETURN_COST_EUR if origin == "DUB" else 0.0
     effective = flight_price + bus
 
     out_dep = outbound.get("departureDate", "")
@@ -1164,7 +1211,7 @@ def _aer_lingus_normalise_fare(fare: dict, origin: str) -> dict | None:
             return None
 
         flight_price = float(total_price)
-        bus = 0.0 if origin_from_fare == "SNN" else BUS_RETURN_COST_EUR
+        bus = BUS_RETURN_COST_EUR if origin_from_fare == "DUB" else 0.0
         effective = flight_price + bus
 
         # Aer Lingus puts the actual flight details under trips[0].
@@ -1296,7 +1343,9 @@ def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
     """
     entries: list[dict] = []
     for origin, routes in EUROPE_ROUTES.items():
-        bus = 0.0 if origin == "SNN" else BUS_RETURN_COST_EUR
+        # Bus surcharge is DUB-specific (Limerick<->Dublin return bus).
+        # SNN departs from Shannon, BHX from Birmingham -- neither pays.
+        bus = BUS_RETURN_COST_EUR if origin == "DUB" else 0.0
         for iata, city, country, lat, lon in routes:
             for friday, sunday in weekends:
                 entries.append({
@@ -1330,10 +1379,13 @@ def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
 def write_prospects_mode(reason: str = "") -> int:
     weekends = list(next_weekends(PROSPECTS_WEEKENDS))
     entries = build_prospects(weekends)
-    # Sort: soonest weekend first, Shannon ahead of Dublin, then country/city.
+    # Sort: soonest weekend first, Shannon / Dublin / Birmingham in
+    # that order (rough cost-to-the-Irish-user ordering), then
+    # country and city.
+    _ORIGIN_SORT_RANK = {"SNN": 0, "DUB": 1, "BHX": 2}
     entries.sort(key=lambda d: (
         d["outbound_departure"][:10],
-        0 if d["origin"] == "SNN" else 1,
+        _ORIGIN_SORT_RANK.get(d["origin"], 99),
         d["destination_country"],
         d["destination_city"],
     ))

@@ -14,7 +14,10 @@
  * No push notifications or background sync (Discord alerts still
  * come through normally since those run server-side).
  */
-const CACHE_VERSION = "v1";
+// Bump this whenever the dashboard shell (html/css/js) changes so
+// users pick up the new files on next reload. Old caches get pruned
+// in the activate hook.
+const CACHE_VERSION = "v2-bhx";
 const SHELL_CACHE = `shell-${CACHE_VERSION}`;
 const DATA_CACHE = `data-${CACHE_VERSION}`;
 const PHOTO_CACHE = `photos-${CACHE_VERSION}`;

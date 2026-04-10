@@ -110,6 +110,7 @@ main {
 
 .dot.snn { background: #4ade80; }
 .dot.dub { background: #60a5fa; }
+.dot.bhx { background: #fb923c; }
 
 .sort-row {
   font-size: 12px;
@@ -268,6 +269,12 @@ main {
 }
 .price-badge.dub:hover {
   border-color: #60a5fa;
+}
+.price-badge.bhx {
+  border-color: rgba(251, 146, 60, 0.6);
+}
+.price-badge.bhx:hover {
+  border-color: #fb923c;
 }
 .price-badge.selected {
   background: #38bdf8;
@@ -464,6 +471,7 @@ main {
 
 .badge.snn { background: rgba(74, 222, 128, .15); color: #86efac; border: 1px solid rgba(74, 222, 128, .4); }
 .badge.dub { background: rgba(96, 165, 250, .15); color: #93c5fd; border: 1px solid rgba(96, 165, 250, .4); }
+.badge.bhx { background: rgba(251, 146, 60, .15); color: #fdba74; border: 1px solid rgba(251, 146, 60, .4); }
 .badge.carrier { margin-left: 4px; font-size: 9px; padding: 2px 6px; }
 .badge.carrier-fr { background: rgba(253, 224, 71, .12); color: #fde047; border: 1px solid rgba(253, 224, 71, .4); }
 .badge.carrier-ei { background: rgba(34, 197, 94, .12); color: #86efac; border: 1px solid rgba(34, 197, 94, .4); }

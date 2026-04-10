@@ -1,9 +1,10 @@
 /* Weekend Getaway Flight Scanner - dashboard front-end */
 
-const ORIGIN_LABEL = { SNN: "Shannon", DUB: "Dublin" };
+const ORIGIN_LABEL = { SNN: "Shannon", DUB: "Dublin", BHX: "Birmingham" };
 const ORIGIN_COLOR = {
-  SNN: { stroke: "#4ade80", fill: "#065f46" },
-  DUB: { stroke: "#60a5fa", fill: "#1e3a8a" },
+  SNN: { stroke: "#4ade80", fill: "#065f46" },  // green
+  DUB: { stroke: "#60a5fa", fill: "#1e3a8a" },  // blue
+  BHX: { stroke: "#fb923c", fill: "#7c2d12" },  // amber/orange
 };
 
 const $ = (id) => document.getElementById(id);
@@ -105,6 +106,7 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 const ORIGIN_COORDS = {
   SNN: [52.702, -8.925],
   DUB: [53.421, -6.27],
+  BHX: [52.4539, -1.748],
 };
 
 function estimateCO2Kg(deal) {
@@ -187,10 +189,14 @@ function sortDeals(deals, mode) {
       return diff !== 0 ? diff : a.outbound_departure.localeCompare(b.outbound_departure);
     });
   } else if (mode === "date") {
+    // Secondary sort: SNN -> DUB -> BHX -> anything else.
+    const ORIGIN_RANK = { SNN: 0, DUB: 1, BHX: 2 };
     copy.sort((a, b) => {
       const d = a.outbound_departure.localeCompare(b.outbound_departure);
       if (d !== 0) return d;
-      if (a.origin !== b.origin) return a.origin === "SNN" ? -1 : 1;
+      const ra = ORIGIN_RANK[a.origin] ?? 99;
+      const rb = ORIGIN_RANK[b.origin] ?? 99;
+      if (ra !== rb) return ra - rb;
       return (a.destination_city || "").localeCompare(b.destination_city || "");
     });
   } else if (mode === "country") {
@@ -224,22 +230,22 @@ function initMap() {
     }
   ).addTo(map);
 
-  // Mark the Irish origins for context.
-  L.circleMarker([52.702, -8.925], {
-    radius: 6,
-    color: "#facc15",
-    fillColor: "#854d0e",
-    fillOpacity: 1,
-    weight: 2,
-  }).addTo(map).bindTooltip("Shannon (SNN)");
-
-  L.circleMarker([53.421, -6.27], {
-    radius: 6,
-    color: "#facc15",
-    fillColor: "#854d0e",
-    fillOpacity: 1,
-    weight: 2,
-  }).addTo(map).bindTooltip("Dublin (DUB)");
+  // Mark the origin airports for context. Yellow rings so they're
+  // distinct from the destination price badges.
+  const ORIGIN_PINS = [
+    { coords: [52.702, -8.925], label: "Shannon (SNN)" },
+    { coords: [53.421, -6.27],  label: "Dublin (DUB)" },
+    { coords: [52.4539, -1.748], label: "Birmingham (BHX)" },
+  ];
+  ORIGIN_PINS.forEach((pin) => {
+    L.circleMarker(pin.coords, {
+      radius: 6,
+      color: "#facc15",
+      fillColor: "#854d0e",
+      fillOpacity: 1,
+      weight: 2,
+    }).addTo(map).bindTooltip(pin.label);
+  });
 
   return map;
 }
@@ -274,15 +280,17 @@ function renderDealCard(deal, idx) {
     : `<span class="price-check">check &rarr;</span>`;
   const co2Kg = estimateCO2Kg(deal);
   const bus = deal.bus_surcharge_eur || 0;
-  // Bus surcharge is now a separate small note, not rolled into the
-  // headline price. SNN is still "direct from Shannon" (zero bus).
+  // Bus surcharge is a separate note, not rolled into the headline
+  // price. Only DUB deals carry a non-zero bus_surcharge (Limerick
+  // <-> Dublin bus). SNN and BHX show "direct from <origin>".
+  const originName = ORIGIN_LABEL[deal.origin] || deal.origin;
   const priceNote = hasPrice
-    ? (deal.origin === "SNN"
-        ? "direct from Shannon"
-        : `+&euro;${bus.toFixed(0)} Limerick bus (not incl.)`)
-    : (deal.origin === "SNN"
-        ? "live price via link"
-        : `+&euro;${bus.toFixed(0)} Limerick bus (not incl.)`);
+    ? (bus > 0
+        ? `+&euro;${bus.toFixed(0)} Limerick bus (not incl.)`
+        : `direct from ${originName}`)
+    : (bus > 0
+        ? `+&euro;${bus.toFixed(0)} Limerick bus (not incl.)`
+        : "live price via link");
 
   // Price history annotations from history.py: is_lowest_ever,
   // price_delta_eur, last_seen_eur. Show a small trend chip when
@@ -433,9 +441,11 @@ async function main() {
   function currentFilters() {
     const sliderEl = $("price-max");
     const maxPrice = sliderEl ? parseInt(sliderEl.value, 10) : 150;
+    const bhxEl = $("filter-bhx");
     return {
       showSNN: $("filter-snn").checked,
       showDUB: $("filter-dub").checked,
+      showBHX: bhxEl ? bhxEl.checked : true,
       maxPrice: isFinite(maxPrice) ? maxPrice : 150,
       sortMode: $("sort").value,
       windows: enabledWindows,
@@ -447,6 +457,7 @@ async function main() {
     return deals.filter((d) => {
       if (d.origin === "SNN" && !f.showSNN) return false;
       if (d.origin === "DUB" && !f.showDUB) return false;
+      if (d.origin === "BHX" && !f.showBHX) return false;
       if (dealPrice(d) > f.maxPrice) return false;
       // Weekend window: default to fri_sun for deals that predate the
       // multi-window field (back-compat with old deals.json).
@@ -652,6 +663,10 @@ async function main() {
 
   $("filter-snn").addEventListener("change", render);
   $("filter-dub").addEventListener("change", render);
+  const bhxCheckbox = $("filter-bhx");
+  if (bhxCheckbox) {
+    bhxCheckbox.addEventListener("change", render);
+  }
   $("sort").addEventListener("change", render);
   const currencyEl = $("currency");
   if (currencyEl) {
