@@ -109,13 +109,17 @@ jobs:
           fi
 
       - name: Configure GitHub Pages
+        id: configure_pages
+        continue-on-error: true
         uses: actions/configure-pages@v5
 
       - name: Upload dashboard as Pages artifact
+        if: steps.configure_pages.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dashboard
 
       - name: Deploy to GitHub Pages
+        if: steps.configure_pages.outcome == 'success'
         id: deploy
         uses: actions/deploy-pages@v4
