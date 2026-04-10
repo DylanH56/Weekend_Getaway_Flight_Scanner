@@ -69,7 +69,7 @@ except ImportError:
 CURL_IMPERSONATE = "chrome120"
 
 
-def _http_get(url: str, **kwargs):
+def _http_get(url: str, *, allow_plain_fallback: bool = True, **kwargs):
     """Single entry point for outbound HTTP GETs to Ryanair.
 
     Routes through curl_cffi when available so the TLS handshake
@@ -79,9 +79,17 @@ def _http_get(url: str, **kwargs):
     If curl_cffi raises ANYTHING (unknown impersonate profile, API
     shape change in a future release, libcurl runtime mismatch, etc.)
     we log it, flip the global flag so subsequent calls skip
-    curl_cffi, and retry with plain requests. Never propagate a
-    curl_cffi exception to the caller -- that's what broke the last
-    CI run.
+    curl_cffi, and (by default) retry with plain requests.
+
+    ``allow_plain_fallback=False`` disables the plain-requests retry
+    for callers that CANNOT tolerate it. Specifically: Aer Lingus,
+    whose Cloudflare layer appears to hang indefinitely on plain
+    requests -- observed at line 459 of scan #N, where after a
+    curl_cffi 10s timeout the code silently blocks forever inside
+    ``requests.get()``. For those callers we re-raise the curl_cffi
+    exception and let the caller decide whether to retry or abort.
+    Ryanair still defaults to allow_plain_fallback=True since it's
+    been observed to work fine with plain requests.
     """
     global _CURL_CFFI_AVAILABLE  # noqa: PLW0603
     if _CURL_CFFI_AVAILABLE:
@@ -92,10 +100,12 @@ def _http_get(url: str, **kwargs):
         except Exception as e:
             print(
                 f"  [warn] curl_cffi call failed ({type(e).__name__}: {e}); "
-                f"falling back to plain requests for the rest of this run.",
+                f"{'falling back to plain requests for the rest of this run.' if allow_plain_fallback else 'plain-requests fallback disabled for this caller, re-raising.'}",
                 file=sys.stderr,
             )
             _CURL_CFFI_AVAILABLE = False
+            if not allow_plain_fallback:
+                raise
     return requests.get(url, **kwargs)
 
 
@@ -958,6 +968,7 @@ def _aer_lingus_fetch_fares(
                 params=params,
                 headers=headers,
                 timeout=_AER_LINGUS_CALL_TIMEOUT,
+                allow_plain_fallback=False,
             )
             status = getattr(resp, "status_code", None)
             if status is None or status >= 400:
