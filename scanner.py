@@ -32,7 +32,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import signal
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Iterator
@@ -67,6 +69,43 @@ except ImportError:
 # with the RYANAIR_HEADERS Sec-Ch-Ua fields so the handshake and the
 # client hints don't contradict each other.
 CURL_IMPERSONATE = "chrome120"
+
+
+def _http_get_with_watchdog(url: str, watchdog_seconds: float, **kwargs):
+    """Run _http_get on a daemon thread with a hard wall-clock cap.
+
+    If the underlying call hangs -- inside libcurl, inside requests,
+    inside DNS, doesn't matter -- the daemon thread keeps running but
+    the main thread joins with a timeout and raises. The leaked thread
+    is daemon=True so it doesn't prevent process exit.
+
+    Layer 1 of the 4-layer Aer Lingus anti-hang defense. See commit
+    message for the full set.
+
+    Note: Python can't forcibly kill threads, so a leaked thread holds
+    whatever resources curl_cffi/requests allocated for the hung call.
+    For a short-lived scanner process that exits at the end of _run(),
+    this is fine -- OS cleanup handles it.
+    """
+    result: dict = {}
+
+    def worker() -> None:
+        try:
+            result["resp"] = _http_get(url, **kwargs)
+        except BaseException as e:  # noqa: BLE001
+            result["exc"] = e
+
+    t = threading.Thread(target=worker, daemon=True, name="al-http-watchdog")
+    t.start()
+    t.join(timeout=watchdog_seconds)
+
+    if t.is_alive():
+        raise TimeoutError(
+            f"watchdog: {url} exceeded {watchdog_seconds:.0f}s hard cap"
+        )
+    if "exc" in result:
+        raise result["exc"]
+    return result.get("resp")
 
 
 def _http_get(url: str, *, allow_plain_fallback: bool = True, **kwargs):
@@ -681,11 +720,23 @@ AER_LINGUS_URL = "https://www.aerlingus.com/api/v2/flights/fixed"
 AER_LINGUS_FALLBACK_URLS: list[str] = []
 
 _AER_LINGUS_WORKING_URL: str | None = None
-# Global kill-switch: flipped to True only if EVERY call on the first
-# weekend fails (endpoint dead / Kasada full-block / DNS broken). Once
-# flipped, every subsequent _aer_lingus_fetch_fares returns empty
+# Global kill-switch: flipped to True if EVERY call on the first
+# weekend fails, OR if DISABLE_AER_LINGUS env var is set to truthy.
+# Once flipped, every subsequent _aer_lingus_fetch_fares returns empty
 # immediately. Reset on next module import (fresh workflow run).
-_AER_LINGUS_DISABLED: bool = False
+#
+# Set DISABLE_AER_LINGUS=1 as a repo variable (Settings -> Secrets and
+# variables -> Actions -> Variables) to emergency-disable AL without
+# a code push. Takes effect on the next scheduled run.
+_AER_LINGUS_DISABLED: bool = (
+    os.environ.get("DISABLE_AER_LINGUS", "").strip().lower()
+    not in ("", "0", "false", "no", "off")
+)
+if _AER_LINGUS_DISABLED:
+    print(
+        "  [info] aer_lingus: disabled via DISABLE_AER_LINGUS env var",
+        file=sys.stderr,
+    )
 
 # Per-route kill-switch: (origin, dest) tuples that have failed enough
 # consecutive weekends to earn a skip for the rest of the run. Populated
@@ -963,8 +1014,14 @@ def _aer_lingus_fetch_fares(
         failure_reason: str | None = None
         data: dict | None = None
         try:
-            resp = _http_get(
+            # Layer 1: thread watchdog -- hard wall-clock cap on this
+            # call regardless of where it hangs. Slightly longer than
+            # the call timeout so the per-request timeout fires first
+            # on cleanly-timing-out calls and the watchdog only fires
+            # if things have gone truly sideways.
+            resp = _http_get_with_watchdog(
                 AER_LINGUS_URL,
+                watchdog_seconds=_AER_LINGUS_CALL_TIMEOUT + 2.0,
                 params=params,
                 headers=headers,
                 timeout=_AER_LINGUS_CALL_TIMEOUT,
@@ -1200,14 +1257,17 @@ SOURCES = [
         "label": "Aer Lingus (EI)",
         "fetch": _aer_lingus_fetch_fares,
         "normalise": _aer_lingus_normalise_fare,
-        # AL is expensive per-call (one HTTP call per destination)
-        # and the fares are typically well above PRICE_CAP anyway,
-        # so we trim the scan scope aggressively: classic Fri->Sun
-        # only, and only the next 13 weekends (~3 months). Total
-        # call count becomes ~9 dests x 13 weekends = ~117, which
-        # adds 2-3 minutes to the scan.
+        # AL is expensive per-call (one HTTP call per destination) and
+        # the fares are typically well above PRICE_CAP anyway, so we
+        # trim the scan scope aggressively: classic Fri->Sun only, and
+        # only the next 3 weekends. Total call count becomes ~9 dests
+        # x 3 weekends = ~27 calls, bounding worst-case AL time at
+        # ~27 x 8s = ~216s even if every single call has to fire the
+        # watchdog. 3 weekends is enough to catch "this coming weekend
+        # + the two after" which is the practical near-term horizon
+        # for a last-minute getaway.
         "windows": ["fri_sun"],
-        "max_weekends": 13,
+        "max_weekends": 3,
     },
 ]
 
@@ -1358,6 +1418,42 @@ def send_test_notification() -> int:
 
 
 # ---------- Main ----------
+# Top-level scan wall-clock cap. If the scan hasn't finished in this
+# many seconds, we raise TimeoutError from a SIGALRM handler and let
+# the outer main() catch it and write whatever partial results we
+# have. 10 minutes is deliberately generous -- a healthy scan lands
+# at ~3-4 minutes; this exists purely so a catastrophic hang (e.g.
+# a hung libcurl read that bypasses every other layer) can't take
+# the scan past 10.
+SCAN_WALL_CLOCK_SECONDS = 600
+
+
+class _ScanTimeoutError(TimeoutError):
+    """Raised by the SIGALRM handler when SCAN_WALL_CLOCK_SECONDS elapses."""
+
+
+def _install_scan_watchdog() -> bool:
+    """Install a SIGALRM handler that raises _ScanTimeoutError after
+    SCAN_WALL_CLOCK_SECONDS. Returns True if installed, False on
+    platforms without SIGALRM (Windows). Idempotent."""
+    if not hasattr(signal, "SIGALRM"):
+        return False
+
+    def _handler(signum: int, frame) -> None:  # noqa: ARG001
+        raise _ScanTimeoutError(
+            f"top-level scan watchdog: {SCAN_WALL_CLOCK_SECONDS}s exceeded"
+        )
+
+    signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(SCAN_WALL_CLOCK_SECONDS)
+    return True
+
+
+def _clear_scan_watchdog() -> None:
+    if hasattr(signal, "SIGALRM"):
+        signal.alarm(0)
+
+
 def _run() -> int:
     if "--test-notification" in sys.argv[1:]:
         return send_test_notification()
@@ -1365,6 +1461,21 @@ def _run() -> int:
     if FORCE_PROSPECTS:
         return write_prospects_mode("SCANNER_PROSPECTS_ONLY set")
 
+    watchdog_installed = _install_scan_watchdog()
+    if watchdog_installed:
+        print(
+            f"  [info] top-level scan watchdog armed: "
+            f"{SCAN_WALL_CLOCK_SECONDS}s hard cap",
+            file=sys.stderr,
+        )
+
+    try:
+        return _run_impl()
+    finally:
+        _clear_scan_watchdog()
+
+
+def _run_impl() -> int:
     all_deals: list[dict] = []
     weekends = list(next_weekends(WEEKENDS_AHEAD))
     http_client = (
