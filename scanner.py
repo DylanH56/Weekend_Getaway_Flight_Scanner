@@ -141,6 +141,10 @@ RYANAIR_HEADERS = {
 }
 
 OUTPUT_PATH = Path(__file__).parent / "dashboard" / "deals.json"
+# Mirror of every print() the scanner emits, written next to deals.json
+# so the branch itself carries a diagnostic trace even when we can't get
+# at the GitHub Actions step log. Small enough to commit on every run.
+LOG_PATH = Path(__file__).parent / "dashboard" / "last_scan_log.txt"
 
 # Force prospects-mode fallback even when Ryanair would be reachable.
 # Useful for offline/sandbox runs.
@@ -653,27 +657,66 @@ def _run() -> int:
     return 0
 
 
-def main() -> int:
-    """Crash-proof entry point.
+class _Tee:
+    """Fan-out write() to several underlying streams.
 
-    The previous CI run showed that any unhandled exception from the
-    scan loop blows up the whole job with a generic "exit code 1" and
-    no useful annotations. Wrap everything so that the worst case is
-    "dump the traceback, fall back to prospects mode, exit 0" -- the
-    workflow still succeeds, deals.json is still written, and the
-    actual error is visible in the step log instead of hidden behind
-    a cryptic exit code.
+    Lets us capture everything the scanner prints into an in-memory
+    buffer AND still echo it to the real stdout/stderr for the GitHub
+    Actions log. Duck-typed against `sys.stdout`; doesn't need the full
+    TextIOWrapper interface.
     """
+
+    def __init__(self, *streams) -> None:
+        self.streams = streams
+
+    def write(self, data):
+        for s in self.streams:
+            try:
+                s.write(data)
+            except Exception:
+                pass
+        return len(data)
+
+    def flush(self) -> None:
+        for s in self.streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
+
+    def isatty(self) -> bool:
+        return False
+
+
+def main() -> int:
+    """Crash-proof entry point that also captures output to a log file.
+
+    Tees stdout/stderr into an in-memory buffer so the scanner's full
+    output lands in dashboard/last_scan_log.txt next to deals.json.
+    The commit step in the workflow adds that file to the auto-commit,
+    which means every run leaves a readable breadcrumb on the branch
+    -- no GitHub Actions log scraping required to debug.
+
+    Top-level try/except catches any unhandled exception, dumps the
+    traceback into the same log file, and falls back to prospects
+    mode so the job still succeeds and the dashboard still updates.
+    """
+    from io import StringIO
+
+    log_buffer = StringIO()
+    real_stdout = sys.stdout
+    real_stderr = sys.stderr
+    sys.stdout = _Tee(real_stdout, log_buffer)  # type: ignore[assignment]
+    sys.stderr = _Tee(real_stderr, log_buffer)  # type: ignore[assignment]
+
+    rc = 1
     try:
-        return _run()
+        rc = _run()
     except SystemExit:
         raise
     except BaseException as e:  # noqa: BLE001 - last-ditch net by design
         import traceback
-        print(
-            f"\n::error::scanner crashed with {type(e).__name__}: {e}",
-            file=sys.stderr,
-        )
+        print(f"\n::error::scanner crashed with {type(e).__name__}: {e}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         print(
             "\nFalling back to prospects mode so deals.json still gets "
@@ -681,13 +724,33 @@ def main() -> int:
             file=sys.stderr,
         )
         try:
-            return write_prospects_mode(f"crashed: {type(e).__name__}")
+            rc = write_prospects_mode(f"crashed: {type(e).__name__}")
         except Exception as inner:
             print(
                 f"Prospects-mode fallback ALSO crashed ({inner}); giving up.",
                 file=sys.stderr,
             )
-            return 1
+            rc = 1
+    finally:
+        sys.stdout = real_stdout
+        sys.stderr = real_stderr
+        try:
+            LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            header = (
+                f"# last_scan_log.txt\n"
+                f"# Generated: {dt.datetime.now(dt.timezone.utc).isoformat()}\n"
+                f"# Scanner exit code: {rc}\n"
+                f"# Python: {sys.version.split()[0]}\n"
+                f"# curl_cffi: {_CURL_CFFI_VERSION} "
+                f"(available={_CURL_CFFI_AVAILABLE})\n"
+                f"# CURL_IMPERSONATE: {CURL_IMPERSONATE}\n"
+                f"# ------------------------------------------------------------\n"
+            )
+            LOG_PATH.write_text(header + log_buffer.getvalue())
+            print(f"Wrote scan log to {LOG_PATH}")
+        except Exception as e:
+            print(f"Failed to write scan log: {e}", file=sys.stderr)
+    return rc
 
 
 if __name__ == "__main__":
