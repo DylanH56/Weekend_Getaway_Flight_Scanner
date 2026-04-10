@@ -693,6 +693,21 @@ _AER_LINGUS_ROUTE_FAIL_THRESHOLD = 2
 # in a row for the same route.
 _AER_LINGUS_WARNED: set[tuple[str, str, str]] = set()
 
+# Wall-clock budget cap for the entire Aer Lingus portion of a scan.
+# Set to 3 minutes: enough time for a healthy run (~60-120s), short
+# enough that a network-hung CI run can't drag the total scan past
+# ~5-6 minutes. Initialized on the first _aer_lingus_fetch_fares call
+# of the run. Once elapsed, AL is disabled for the rest of the run.
+_AER_LINGUS_START_TIME: float | None = None
+_AER_LINGUS_BUDGET_SECONDS: float = 180.0
+
+# Per-call timeout for the Aer Lingus HTTP call. 6s is aggressive but
+# healthy responses come back in 500ms-2s, and anything slower is
+# almost certainly a hung connection we don't want to wait on. Plain
+# `requests` (the curl_cffi fallback) respects this; curl_cffi has its
+# own 10s internal cap that fires first regardless.
+_AER_LINGUS_CALL_TIMEOUT: float = 6.0
+
 AER_LINGUS_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -828,8 +843,28 @@ def _aer_lingus_fetch_fares(
         and skip AL entirely for the rest of the run.
     """
     global _AER_LINGUS_WORKING_URL, _AER_LINGUS_DISABLED
+    global _AER_LINGUS_START_TIME
 
     if _AER_LINGUS_DISABLED:
+        return {"fares": []}
+
+    # Start the wall-clock budget on the first AL call of the run.
+    if _AER_LINGUS_START_TIME is None:
+        _AER_LINGUS_START_TIME = time.time()
+
+    # Wall-clock budget check: once elapsed, disable AL for the rest
+    # of the run. Prevents a CI network-hang from dragging the total
+    # scan time past reasonable bounds. Fires silently apart from a
+    # one-time "budget exceeded" log line.
+    elapsed = time.time() - _AER_LINGUS_START_TIME
+    if elapsed > _AER_LINGUS_BUDGET_SECONDS:
+        _AER_LINGUS_DISABLED = True
+        print(
+            f"  [warn] aer_lingus: budget of {_AER_LINGUS_BUDGET_SECONDS:.0f}s "
+            f"exhausted ({elapsed:.0f}s elapsed) -- disabling AL for the "
+            f"rest of this run.",
+            file=sys.stderr,
+        )
         return {"fares": []}
 
     destinations = AER_LINGUS_DESTINATIONS.get(origin, [])
@@ -854,6 +889,18 @@ def _aer_lingus_fetch_fares(
         if route_key in _AER_LINGUS_DEAD_ROUTES:
             continue
 
+        # Mid-loop budget check: if we've blown the wall-clock budget
+        # partway through a weekend, bail out immediately instead of
+        # finishing the remaining destinations.
+        if time.time() - (_AER_LINGUS_START_TIME or 0) > _AER_LINGUS_BUDGET_SECONDS:
+            _AER_LINGUS_DISABLED = True
+            print(
+                f"  [warn] aer_lingus: budget exhausted mid-weekend -- "
+                f"disabling AL for the rest of this run.",
+                file=sys.stderr,
+            )
+            break
+
         any_call_attempted = True
 
         params = {
@@ -876,7 +923,10 @@ def _aer_lingus_fetch_fares(
         data: dict | None = None
         try:
             resp = _http_get(
-                AER_LINGUS_URL, params=params, headers=headers, timeout=20
+                AER_LINGUS_URL,
+                params=params,
+                headers=headers,
+                timeout=_AER_LINGUS_CALL_TIMEOUT,
             )
             status = getattr(resp, "status_code", None)
             if status is None or status >= 400:
@@ -963,7 +1013,7 @@ def _aer_lingus_fetch_fares(
             "_inbound_flight": in_flight,
         })
 
-        time.sleep(0.2)  # be polite, aerlingus.com is rate-limited
+        time.sleep(0.1)  # be polite, aerlingus.com is rate-limited
 
     # Global kill-switch: if we actually TRIED calls this weekend, none
     # of them succeeded, AND we've never seen a working response all
