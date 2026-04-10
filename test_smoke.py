@@ -339,6 +339,36 @@ def test_send_test_notification() -> None:
     assert_eq("returns 1 when nothing configured", rc, 1)
 
 
+def test_fetch_fares_uses_http_get_seam() -> None:
+    """Verify scanner.fetch_fares routes through the mockable _http_get helper."""
+    print("\n=== scanner.fetch_fares: uses _http_get seam ===")
+    import datetime as dt
+
+    captured_kwargs: dict = {}
+
+    def fake_http_get(url, **kwargs):
+        captured_kwargs["url"] = url
+        captured_kwargs["params"] = kwargs.get("params")
+        captured_kwargs["headers"] = kwargs.get("headers")
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        resp.json = lambda: {"fares": []}
+        return resp
+
+    with patch.object(scanner, "_http_get", side_effect=fake_http_get):
+        result = scanner.fetch_fares("SNN", dt.date(2026, 5, 1), dt.date(2026, 5, 3))
+
+    assert_eq("fetch_fares returned dict", isinstance(result, dict), True)
+    assert_eq("_http_get called with Ryanair URL",
+              captured_kwargs.get("url") == scanner.RYANAIR_URL, True)
+    params = captured_kwargs.get("params") or {}
+    assert_eq("params include SNN", params.get("departureAirportIataCode"), "SNN")
+    assert_eq("params include evening outbound window",
+              params.get("outboundDepartureTimeFrom"), "16:00")
+    assert_eq("params include evening inbound window",
+              params.get("inboundDepartureTimeFrom"), "15:00")
+
+
 def test_deeplink_shapes() -> None:
     print("\n=== scanner deep-link builders ===")
     g = scanner.google_flights_url("SNN", "FAO", "2026-05-01", "2026-05-03")
@@ -358,6 +388,7 @@ def main() -> int:
     test_find_newly_alertable()
     test_scanner_normalise()
     test_send_test_notification()
+    test_fetch_fares_uses_http_get_seam()
     test_deeplink_shapes()
 
     passed = sum(1 for _, ok, _ in results if ok)

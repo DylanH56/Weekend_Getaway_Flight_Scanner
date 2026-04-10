@@ -40,6 +40,38 @@ from urllib.parse import quote_plus
 
 import requests
 
+# curl_cffi gives us libcurl-impersonate under the hood: real Chrome
+# TLS fingerprint, cipher order, ALPN, HTTP/2 settings. Required for
+# Cloudflare-fronted endpoints (Ryanair is one) that fingerprint the
+# TLS handshake, not just the User-Agent. If it isn't installed we
+# fall back to plain `requests` and log a warning -- useful for local
+# offline dev but expected to 403 against the real Ryanair endpoint.
+try:
+    from curl_cffi import requests as _curl_requests  # type: ignore
+    _CURL_CFFI_AVAILABLE = True
+except ImportError:
+    _curl_requests = None  # type: ignore
+    _CURL_CFFI_AVAILABLE = False
+
+# When using curl_cffi, which Chrome build to impersonate. Keep the
+# numeric version aligned with the RYANAIR_HEADERS Sec-Ch-Ua fields
+# so the handshake and the headers don't contradict each other.
+CURL_IMPERSONATE = "chrome124"
+
+
+def _http_get(url: str, **kwargs):
+    """Single entry point for outbound HTTP GETs to Ryanair.
+
+    Routes through curl_cffi when available so the TLS handshake
+    matches Chrome's; falls back to plain requests otherwise. Kept as
+    a standalone helper so tests can monkey-patch exactly one symbol.
+    """
+    if _CURL_CFFI_AVAILABLE:
+        kwargs.setdefault("impersonate", CURL_IMPERSONATE)
+        return _curl_requests.get(url, **kwargs)
+    return requests.get(url, **kwargs)
+
+
 # ---------- Config ----------
 PRICE_CAP_EUR = 100.0
 # Approx Limerick <-> Dublin return via Bus Eireann / Citylink / Dublin Coach.
@@ -57,17 +89,15 @@ INBOUND_TO = "23:59"
 # matching date/time/price filters, no authentication required.
 RYANAIR_URL = "https://services-api.ryanair.com/farfnd/v4/roundTripFares"
 
-# Browser-ish headers to look like a current Chrome hitting the
-# ryanair.com fare-finder page, which is the only client that normally
-# calls this endpoint. Cloudflare (Ryanair sits behind it) has been
-# getting stricter about bot-looking clients, so we send a full set of
-# sec-* client hints rather than the bare minimum. If this still 403s
-# from GitHub Actions runners, the next step is swapping `requests` for
-# `curl_cffi` which can also spoof the TLS fingerprint.
+# Browser-ish headers to pair with the curl_cffi Chrome impersonation.
+# Sec-Ch-Ua claims Chrome 124 because CURL_IMPERSONATE above is set to
+# "chrome124" -- the TLS handshake and the client hints must agree or
+# Cloudflare will flag the mismatch. Keep them in sync if you bump
+# either value.
 RYANAIR_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-IE,en-GB;q=0.9,en;q=0.8",
@@ -77,7 +107,7 @@ RYANAIR_HEADERS = {
     "Sec-Fetch-Dest": "empty",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Site": "same-site",
-    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua": '"Google Chrome";v="124", "Chromium";v="124", "Not_A Brand";v="24"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"Windows"',
     "Cache-Control": "no-cache",
@@ -228,7 +258,7 @@ def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
         "limit": "200",
         "offset": "0",
     }
-    resp = requests.get(
+    resp = _http_get(
         RYANAIR_URL, params=params, headers=RYANAIR_HEADERS, timeout=30
     )
     resp.raise_for_status()
@@ -465,10 +495,15 @@ def main() -> int:
 
     all_deals: list[dict] = []
     weekends = list(next_weekends(WEEKENDS_AHEAD))
+    http_client = (
+        f"curl_cffi impersonate={CURL_IMPERSONATE}"
+        if _CURL_CFFI_AVAILABLE
+        else "plain python-requests (likely to 403)"
+    )
     print(
         f"Scanning {len(weekends)} weekends from {weekends[0][0]} "
         f"to {weekends[-1][1]} for fares <= EUR {PRICE_CAP_EUR} "
-        f"(Ryanair public fare-finder)..."
+        f"(Ryanair public fare-finder, HTTP client: {http_client})..."
     )
 
     total_calls = 0
