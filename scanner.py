@@ -1428,8 +1428,21 @@ def send_test_notification() -> int:
 SCAN_WALL_CLOCK_SECONDS = 600
 
 
-class _ScanTimeoutError(TimeoutError):
-    """Raised by the SIGALRM handler when SCAN_WALL_CLOCK_SECONDS elapses."""
+class _ScanTimeoutError(BaseException):
+    """Raised by the SIGALRM handler when SCAN_WALL_CLOCK_SECONDS elapses.
+
+    Intentionally extends BaseException (NOT Exception) so that the
+    enrichment / history / notifier try/except Exception blocks in
+    _run_impl() cannot silently swallow it. Only the outermost
+    main() catch-all (which uses `except BaseException`) is allowed
+    to catch this and fall back to prospects mode.
+
+    If this inherited from Exception (via TimeoutError -> OSError ->
+    Exception, the stdlib default), the first `except Exception:`
+    block after the alarm fires would eat the timeout and the scan
+    would keep running forever. That's exactly the bug we hit in
+    build-2026-04-10.6 where the run sat past the 10-minute cap.
+    """
 
 
 def _install_scan_watchdog() -> bool:
@@ -1460,7 +1473,7 @@ def _clear_scan_watchdog() -> None:
 # shows behaviour that doesn't match this ID's claimed features,
 # the runner is executing stale code. Look for this exact string
 # in the log to know which build is live.
-SCANNER_BUILD_ID = "build-2026-04-10.6 (enrichment watchdog, AL=3w, watchdog=600s)"
+SCANNER_BUILD_ID = "build-2026-04-10.7 (SIGALRM=BaseException, enrich progress, AL=3w)"
 
 
 def _run() -> int:
@@ -1746,16 +1759,37 @@ def _run_impl() -> int:
             **kwargs,
         )
 
+    enrichment_start = time.time()
+    print(
+        f"  [enrich] starting photo + weather enrichment "
+        f"(curl_cffi_available={_CURL_CFFI_AVAILABLE}, {len(deals)} deals)...",
+        file=sys.stderr,
+    )
     try:
         from enrichments import enrich_photos, enrich_weather
         enrich_photos(deals, PHOTO_CACHE_PATH, _enrichment_http_get)
+        print(
+            f"  [enrich] photos done at "
+            f"+{time.time() - enrichment_start:.1f}s",
+            file=sys.stderr,
+        )
     except Exception as e:
         print(f"  [photos] error: {e}", file=sys.stderr)
     try:
         from enrichments import enrich_weather
         enrich_weather(deals, WEATHER_CACHE_PATH, _enrichment_http_get)
+        print(
+            f"  [enrich] weather done at "
+            f"+{time.time() - enrichment_start:.1f}s",
+            file=sys.stderr,
+        )
     except Exception as e:
         print(f"  [weather] error: {e}", file=sys.stderr)
+    print(
+        f"  [enrich] total enrichment time: "
+        f"{time.time() - enrichment_start:.1f}s",
+        file=sys.stderr,
+    )
 
     # Notify BEFORE we overwrite deals.json, so the notifier can compare
     # the new scan against the old file on disk. Wrapped in a bare try
