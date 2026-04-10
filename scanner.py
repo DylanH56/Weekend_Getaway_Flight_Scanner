@@ -1454,7 +1454,23 @@ def _clear_scan_watchdog() -> None:
         signal.alarm(0)
 
 
+# Build identifier -- printed prominently on every run so CI logs
+# self-identify which version of the scanner is running. Bump this
+# string whenever a meaningful behavioural change lands. If a log
+# shows behaviour that doesn't match this ID's claimed features,
+# the runner is executing stale code. Look for this exact string
+# in the log to know which build is live.
+SCANNER_BUILD_ID = "build-2026-04-10.5 (4-layer anti-hang, AL=3w, watchdog=600s)"
+
+
 def _run() -> int:
+    print(
+        "============================================================\n"
+        f"  SCANNER {SCANNER_BUILD_ID}\n"
+        "============================================================",
+        file=sys.stderr,
+    )
+
     if "--test-notification" in sys.argv[1:]:
         return send_test_notification()
 
