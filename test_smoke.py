@@ -341,21 +341,21 @@ def test_send_test_notification() -> None:
 
 def test_fetch_fares_uses_http_get_seam() -> None:
     """Verify scanner.fetch_fares routes through the mockable _http_get helper."""
-    print("\n=== scanner.fetch_fares: uses _http_get seam ===")
+    print("\n=== scanner.fetch_fares: uses _http_get seam (happy path) ===")
     import datetime as dt
 
     captured_kwargs: dict = {}
 
-    def fake_http_get(url, **kwargs):
+    def fake_http_get_ok(url, **kwargs):
         captured_kwargs["url"] = url
         captured_kwargs["params"] = kwargs.get("params")
         captured_kwargs["headers"] = kwargs.get("headers")
         resp = MagicMock()
-        resp.raise_for_status = lambda: None
+        resp.status_code = 200
         resp.json = lambda: {"fares": []}
         return resp
 
-    with patch.object(scanner, "_http_get", side_effect=fake_http_get):
+    with patch.object(scanner, "_http_get", side_effect=fake_http_get_ok):
         result = scanner.fetch_fares("SNN", dt.date(2026, 5, 1), dt.date(2026, 5, 3))
 
     assert_eq("fetch_fares returned dict", isinstance(result, dict), True)
@@ -363,10 +363,33 @@ def test_fetch_fares_uses_http_get_seam() -> None:
               captured_kwargs.get("url") == scanner.RYANAIR_URL, True)
     params = captured_kwargs.get("params") or {}
     assert_eq("params include SNN", params.get("departureAirportIataCode"), "SNN")
-    assert_eq("params include evening outbound window",
-              params.get("outboundDepartureTimeFrom"), "16:00")
-    assert_eq("params include evening inbound window",
-              params.get("inboundDepartureTimeFrom"), "15:00")
+    assert_eq("time-filter params dropped (were causing 400s)",
+              "outboundDepartureTimeFrom" not in params and
+              "inboundDepartureTimeFrom" not in params, True)
+    assert_eq("limit reduced to 50", params.get("limit"), "50")
+
+    print("\n=== scanner.fetch_fares: 400 response raises requests.HTTPError ===")
+
+    def fake_http_get_400(url, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.text = '{"message":"Invalid parameter"}'
+        return resp
+
+    raised = None
+    with patch.object(scanner, "_http_get", side_effect=fake_http_get_400):
+        try:
+            scanner.fetch_fares("SNN", dt.date(2026, 5, 1), dt.date(2026, 5, 3))
+        except Exception as e:
+            raised = e
+
+    import requests as _req
+    assert_eq("raised an HTTPError", isinstance(raised, _req.HTTPError), True)
+    if raised is not None:
+        assert_eq("error message mentions status",
+                  "400" in str(raised), True)
+        assert_eq("error message includes body snippet",
+                  "Invalid parameter" in str(raised), True)
 
 
 def test_deeplink_shapes() -> None:

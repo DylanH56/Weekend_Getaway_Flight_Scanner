@@ -264,30 +264,50 @@ def skyscanner_url(origin: str, dest: str, out_date: str, in_date: str) -> str:
 
 # ---------- Ryanair fetch ----------
 def fetch_fares(origin: str, friday: dt.date, sunday: dt.date) -> dict:
-    """Hit Ryanair's public round-trip fare-finder for a single weekend."""
+    """Hit Ryanair's public round-trip fare-finder for a single weekend.
+
+    Deliberately does NOT send outboundDepartureTimeFrom / inboundDepartureTimeFrom --
+    those params caused 400 Bad Request on the run at commit abff9ca, most
+    likely because farfnd/v4 doesn't support them anymore. The belt-and-braces
+    HH:MM check in `normalise_fare` still enforces the evening window, so we
+    lose nothing by dropping the API-level filter.
+
+    Also normalises whatever exception the HTTP client raises for >= 400
+    responses into a plain `requests.HTTPError` with the response attached,
+    so the main loop's existing HTTPError handler sees a consistent type no
+    matter whether curl_cffi or plain requests made the call.
+    """
     params = {
         "departureAirportIataCode": origin,
         "outboundDepartureDateFrom": friday.isoformat(),
         "outboundDepartureDateTo": friday.isoformat(),
-        "outboundDepartureTimeFrom": OUTBOUND_FROM,
-        "outboundDepartureTimeTo": OUTBOUND_TO,
         "inboundDepartureDateFrom": sunday.isoformat(),
         "inboundDepartureDateTo": sunday.isoformat(),
-        "inboundDepartureTimeFrom": INBOUND_FROM,
-        "inboundDepartureTimeTo": INBOUND_TO,
         # Ask for slightly more than our cap so Dublin fares that still
         # fit after adding the bus surcharge come through.
         "priceValueTo": str(int(PRICE_CAP_EUR + BUS_RETURN_COST_EUR)),
         "currency": "EUR",
         "market": "en-ie",
         "adultPaxCount": "1",
-        "limit": "200",
+        "limit": "50",
         "offset": "0",
     }
     resp = _http_get(
         RYANAIR_URL, params=params, headers=RYANAIR_HEADERS, timeout=30
     )
-    resp.raise_for_status()
+
+    status = getattr(resp, "status_code", None)
+    if status is None or status >= 400:
+        body_snippet = ""
+        try:
+            body_snippet = (resp.text or "")[:300].replace("\n", " ")
+        except Exception:
+            pass
+        raise requests.HTTPError(
+            f"HTTP {status} for Ryanair farfnd  body={body_snippet!r}",
+            response=resp,
+        )
+
     return resp.json()
 
 
