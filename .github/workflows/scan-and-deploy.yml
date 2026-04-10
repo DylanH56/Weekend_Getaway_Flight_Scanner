@@ -44,7 +44,12 @@ on:
       - 'dashboard/app.js'
       - 'dashboard/styles.css'
       - '.github/workflows/scan-and-deploy.yml'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      test_notification:
+        description: "Send ONE fake Discord test message instead of running a scan"
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # to commit deals.json
@@ -83,7 +88,13 @@ jobs:
           # skips the Discord notification step with a no-op log line.
           NOTIFY_DISCORD_WEBHOOK_URL: ${{ secrets.NOTIFY_DISCORD_WEBHOOK_URL }}
           NOTIFY_PRICE_CAP_EUR: ${{ vars.NOTIFY_PRICE_CAP_EUR }}
-        run: python scanner.py
+        run: |
+          if [ "${{ github.event.inputs.test_notification }}" = "true" ]; then
+            echo "::notice::Running in test-notification mode -- no scan, just a fake Discord message."
+            python scanner.py --test-notification
+          else
+            python scanner.py
+          fi
 
       - name: Commit refreshed deals.json (if changed)
         run: |

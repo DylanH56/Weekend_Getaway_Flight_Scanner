@@ -300,6 +300,45 @@ def test_scanner_normalise() -> None:
         assert_eq("effective = price + bus", deal["effective_price_eur"], 80.0)
 
 
+def test_send_test_notification() -> None:
+    """Verify scanner.send_test_notification fires exactly one Discord POST."""
+    print("\n=== scanner.send_test_notification ===")
+    captured: list[dict] = []
+
+    def fake_post(url, **kwargs):
+        captured.append({"url": url, **kwargs})
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        return resp
+
+    with patch.dict(
+        os.environ,
+        {
+            "NOTIFY_DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/TEST/TOKEN",
+            "NOTIFY_NTFY_URL": "",
+        },
+        clear=False,
+    ), patch.object(notifier.requests, "post", side_effect=fake_post):
+        rc = scanner.send_test_notification()
+
+    assert_eq("return code", rc, 0)
+    assert_eq("exactly one POST", len(captured), 1)
+    if captured:
+        body = captured[0].get("json", {})
+        title = (body.get("embeds") or [{}])[0].get("title", "")
+        assert_eq("embed title marks it as TEST", "[TEST]" in title, True)
+
+    # And verify missing webhook produces a clear error + non-zero exit.
+    print("\n=== send_test_notification with no env -> error ===")
+    with patch.dict(
+        os.environ,
+        {"NOTIFY_DISCORD_WEBHOOK_URL": "", "NOTIFY_NTFY_URL": ""},
+        clear=False,
+    ):
+        rc = scanner.send_test_notification()
+    assert_eq("returns 1 when nothing configured", rc, 1)
+
+
 def test_deeplink_shapes() -> None:
     print("\n=== scanner deep-link builders ===")
     g = scanner.google_flights_url("SNN", "FAO", "2026-05-01", "2026-05-03")
@@ -318,6 +357,7 @@ def main() -> int:
     test_notifier_scenarios()
     test_find_newly_alertable()
     test_scanner_normalise()
+    test_send_test_notification()
     test_deeplink_shapes()
 
     passed = sum(1 for _, ok, _ in results if ok)

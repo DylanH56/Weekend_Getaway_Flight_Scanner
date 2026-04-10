@@ -398,8 +398,68 @@ def write_prospects_mode(reason: str = "") -> int:
     return 0
 
 
+# ---------- Test notification (no scan, no network to Ryanair) ----------
+def send_test_notification() -> int:
+    """Fire a single fake-deal Discord/ntfy message and exit.
+
+    Decoupled from the scan pipeline on purpose: lets you prove the
+    webhook wiring is correct without waiting for the cron, without
+    worrying whether Ryanair is reachable, and without needing two
+    scans to get past the first-run baseline guard.
+    """
+    discord = os.environ.get("NOTIFY_DISCORD_WEBHOOK_URL", "").strip()
+    ntfy = os.environ.get("NOTIFY_NTFY_URL", "").strip()
+    if not (discord or ntfy):
+        print(
+            "ERROR: NOTIFY_DISCORD_WEBHOOK_URL is not set in the environment.\n"
+            "Set it and re-run:\n"
+            "    export NOTIFY_DISCORD_WEBHOOK_URL='https://discord.com/api/webhooks/...'\n"
+            "    python scanner.py --test-notification",
+            file=sys.stderr,
+        )
+        return 1
+
+    fake_deal = {
+        "origin": "SNN",
+        "destination_iata": "FAO",
+        "destination_city": "[TEST] Faro",
+        "destination_country": "Portugal",
+        "destination_lat": 37.01,
+        "destination_lon": -7.97,
+        "flight_price_eur": 39.99,
+        "bus_surcharge_eur": 0.0,
+        "effective_price_eur": 39.99,
+        "currency": "EUR",
+        "outbound_departure": "2026-05-08T19:25:00",
+        "outbound_arrival": "2026-05-08T22:00:00",
+        "outbound_flight_number": "FR-TEST",
+        "inbound_departure": "2026-05-10T20:10:00",
+        "inbound_arrival": "2026-05-10T22:30:00",
+        "inbound_flight_number": "FR-TEST",
+        "google_flights_url": (
+            "https://www.google.com/travel/flights?q="
+            "Flights+from+SNN+to+FAO+on+2026-05-08+through+2026-05-10"
+        ),
+        "skyscanner_url": (
+            "https://www.skyscanner.net/transport/flights/snn/fao/260508/260510/"
+        ),
+    }
+
+    print(f"Sending test notification (discord={bool(discord)}, ntfy={bool(ntfy)})...")
+    from notifier import _notify_discord, _notify_ntfy, DEFAULT_ALERT_CAP_EUR
+    if discord:
+        _notify_discord(discord, [fake_deal], DEFAULT_ALERT_CAP_EUR)
+    if ntfy:
+        _notify_ntfy(ntfy, [fake_deal], DEFAULT_ALERT_CAP_EUR)
+    print("Done. Check your Discord channel -- the message title should start with '[TEST]'.")
+    return 0
+
+
 # ---------- Main ----------
 def main() -> int:
+    if "--test-notification" in sys.argv[1:]:
+        return send_test_notification()
+
     if FORCE_PROSPECTS:
         return write_prospects_mode("SCANNER_PROSPECTS_ONLY set")
 
