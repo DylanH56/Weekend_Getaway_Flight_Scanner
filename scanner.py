@@ -151,6 +151,62 @@ def _http_get(url: str, *, allow_plain_fallback: bool = True, **kwargs):
     return requests.get(url, **kwargs)
 
 
+def _http_post(url: str, *, allow_plain_fallback: bool = True, **kwargs):
+    """POST counterpart to _http_get. Same curl_cffi-first,
+    plain-requests-fallback pattern. Used by Wizz Air, whose
+    /Api/search/timetable endpoint is POST-only (unlike Ryanair's
+    farfnd and Aer Lingus's /api/v2/flights/fixed which are both GET).
+
+    Same ``allow_plain_fallback`` semantics as _http_get: pass False
+    if the caller can't tolerate a plain-requests retry hanging
+    (because the endpoint is Cloudflare-hostile to non-Chrome TLS).
+    """
+    global _CURL_CFFI_AVAILABLE  # noqa: PLW0603
+    if _CURL_CFFI_AVAILABLE:
+        try:
+            return _curl_requests.post(
+                url, impersonate=CURL_IMPERSONATE, **kwargs
+            )
+        except Exception as e:
+            print(
+                f"  [warn] curl_cffi POST failed ({type(e).__name__}: {e}); "
+                f"{'falling back to plain requests for the rest of this run.' if allow_plain_fallback else 'plain-requests fallback disabled for this caller, re-raising.'}",
+                file=sys.stderr,
+            )
+            _CURL_CFFI_AVAILABLE = False
+            if not allow_plain_fallback:
+                raise
+    return requests.post(url, **kwargs)
+
+
+def _http_post_with_watchdog(url: str, watchdog_seconds: float, **kwargs):
+    """POST counterpart to _http_get_with_watchdog. Runs _http_post
+    on a daemon thread with a hard wall-clock cap. Same guarantees:
+    if the underlying POST hangs anywhere in the stack the main
+    thread raises TimeoutError and moves on, with the orphaned
+    worker thread leaked as a daemon so process exit isn't blocked.
+    """
+    result: dict = {}
+
+    def worker() -> None:
+        try:
+            result["resp"] = _http_post(url, **kwargs)
+        except BaseException as e:  # noqa: BLE001
+            result["exc"] = e
+
+    t = threading.Thread(target=worker, daemon=True, name="http-post-watchdog")
+    t.start()
+    t.join(timeout=watchdog_seconds)
+
+    if t.is_alive():
+        raise TimeoutError(
+            f"watchdog: POST {url} exceeded {watchdog_seconds:.0f}s hard cap"
+        )
+    if "exc" in result:
+        raise result["exc"]
+    return result.get("resp")
+
+
 # ---------- Config ----------
 # Upper bound for the scanner's flight-price filter (applied to
 # Ryanair's raw round-trip fare, NOT the Limerick-bus-adjusted number).
@@ -1724,6 +1780,466 @@ def _easyjet_normalise_fare(fare: dict, origin: str) -> dict | None:
 # anonymous JSON endpoint. See EASYJET_URL for the implementation.
 
 
+# ---------- Wizz Air fetch ----------
+#
+# Wizz Air (W6 / 6Z) availability endpoint, reverse-engineered from
+# their own consumer site and confirmed alive in multiple OSS scrapers
+# (kovacskokokornel/wizzair-scraper, vojche/wizzair-ticket-prices-
+# monitor). Same curl_cffi + Chrome fingerprint pattern as Aer Lingus.
+#
+# Endpoint shape:
+#   POST https://be.wizzair.com/{version}/Api/search/timetable
+#   Body: JSON with flightList containing origin/destination/date
+#         pairs for outbound + inbound legs
+#   Response: JSON with outboundFlights[] and returnFlights[]
+#
+# Two catches that don't exist for Aer Lingus:
+#   1. The URL contains a version string like /20.9.1/ that Wizz
+#      bumps every few weeks on each deploy. We discover the current
+#      version once per run by fetching wizzair.com's metadata.json;
+#      falls back to a hardcoded recent value if discovery fails.
+#   2. The endpoint is POST, not GET -- which is why _http_post +
+#      _http_post_with_watchdog exist above.
+#
+# Opt-in via ENABLE_WIZZAIR env var. Unset/empty/0/false => entirely
+# absent from SOURCES. Flipping to 1/true/yes in repo Variables
+# turns it on for the next run.
+WIZZAIR_BASE = "https://be.wizzair.com"
+WIZZAIR_METADATA_URL = "https://www.wizzair.com/static/metadata.json"
+# Fallback version if metadata discovery fails. Bump this if
+# discovery breaks AND Wizz has moved past 20.x (unlikely soon).
+WIZZAIR_VERSION_FALLBACK = "20.9.2"
+# Lookup resolved once per run and cached in _WIZZAIR_API_VERSION.
+
+WIZZAIR_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Content-Type": "application/json;charset=UTF-8",
+    "Origin": "https://wizzair.com",
+    "Referer": "https://wizzair.com/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
+    "Sec-Ch-Ua": '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Priority": "u=1, i",
+}
+
+# Wizz Air's network from our three origins. SNN has NO Wizz service
+# and is omitted (the scanner's early-return-on-empty-destinations
+# already handles origins with no entry).
+#   DUB: Wizz flies BUD, KRK, OTP, SOF, WAW, WMI, GDN, VNO, RIX, KTW
+#        (roughly -- sometimes seasonal). We cover the highest-
+#        traffic ~8 routes.
+#   BHX: Wizz's biggest UK base. Huge network to Eastern Europe +
+#        Mediterranean + Greek islands. We cover the top ~12 to
+#        keep the call budget bounded.
+WIZZAIR_DESTINATIONS: dict[str, list[str]] = {
+    "DUB": [
+        "BUD",  # Budapest (Wizz's home base)
+        "KRK",  # Krakow
+        "WAW",  # Warsaw (Chopin)
+        "WMI",  # Warsaw Modlin (Wizz's Warsaw base)
+        "OTP",  # Bucharest
+        "SOF",  # Sofia
+        "GDN",  # Gdansk
+        "KTW",  # Katowice
+    ],
+    "BHX": [
+        "BUD",  # Budapest
+        "KRK",  # Krakow
+        "WAW",  # Warsaw
+        "OTP",  # Bucharest
+        "SOF",  # Sofia
+        "PRG",  # Prague (seasonal but common)
+        "NAP",  # Naples
+        "CTA",  # Catania (Sicily)
+        "TIA",  # Tirana
+        "SKP",  # Skopje
+        "TLV",  # Tel Aviv
+        "FCO",  # Rome
+    ],
+    # SNN: no Wizz service.
+}
+
+# Shared dead-list + warn dedup + budget state, mirroring the Aer
+# Lingus + easyJet pattern. Same 4-layer anti-hang defense.
+_WIZZAIR_DISABLED: bool = False
+_WIZZAIR_DEAD_ROUTES: set[tuple[str, str]] = set()
+_WIZZAIR_ROUTE_FAILURES: dict[tuple[str, str], int] = {}
+_WIZZAIR_WARNED: set[tuple[str, str, str]] = set()
+_WIZZAIR_START_TIME: float | None = None
+_WIZZAIR_BUDGET_SECONDS: float = 150.0  # a bit more than easyJet's
+                                          # 120 because Wizz is more
+                                          # likely to produce in-cap
+                                          # deals (cheaper carrier)
+_WIZZAIR_CALL_TIMEOUT: float = 7.0
+_WIZZAIR_ROUTE_FAIL_THRESHOLD = 2
+_WIZZAIR_API_VERSION: str | None = None  # resolved on first call
+
+_WIZZAIR_ENABLED: bool = (
+    os.environ.get("ENABLE_WIZZAIR", "").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+if _WIZZAIR_ENABLED:
+    print(
+        "  [info] wizzair: ENABLED via ENABLE_WIZZAIR env var "
+        "(experimental, opt-in)",
+        file=sys.stderr,
+    )
+
+
+def _maybe_warn_wizzair(origin: str, dest: str, error_key: str, extra: str | None = None) -> None:
+    """First-occurrence-only warning for Wizz Air failures. Same
+    dedup pattern as Aer Lingus + easyJet."""
+    key = (origin, dest, error_key)
+    if key in _WIZZAIR_WARNED:
+        return
+    _WIZZAIR_WARNED.add(key)
+    msg = f"  [warn] wizzair {origin}->{dest}: {error_key}"
+    if extra:
+        msg += f" ({extra})"
+    print(msg, file=sys.stderr)
+
+
+def _wizzair_discover_api_version() -> str:
+    """Fetch the current Wizz Air API version path from their
+    metadata.json. Caches the result in _WIZZAIR_API_VERSION.
+
+    Wizz bumps the version string (e.g. 20.9.1 -> 20.9.2) on each
+    deploy, so hardcoding it is fragile. Discovery adds one small
+    HTTP call at the start of the first Wizz fetch, then the result
+    is reused for every subsequent call in the same run.
+
+    Falls back to WIZZAIR_VERSION_FALLBACK if:
+      * the metadata endpoint is unreachable
+      * the JSON doesn't contain a recognisable version field
+      * the response times out under the watchdog
+    """
+    global _WIZZAIR_API_VERSION
+    if _WIZZAIR_API_VERSION is not None:
+        return _WIZZAIR_API_VERSION
+
+    try:
+        resp = _http_get_with_watchdog(
+            WIZZAIR_METADATA_URL,
+            watchdog_seconds=5.0,
+            headers=WIZZAIR_HEADERS,
+            timeout=4.0,
+            allow_plain_fallback=False,
+        )
+        status = getattr(resp, "status_code", None)
+        if status == 200:
+            data = resp.json()
+            # metadata.json has a "version" field at the top level
+            # per multiple OSS scrapers; defensive fallback checks
+            # a few alternates in case the schema drifts.
+            version = (
+                (data.get("version") if isinstance(data, dict) else None)
+                or (data.get("apiVersion") if isinstance(data, dict) else None)
+                or (data.get("api") if isinstance(data, dict) else None)
+            )
+            if version and isinstance(version, str):
+                _WIZZAIR_API_VERSION = version
+                print(
+                    f"  [info] wizzair API version discovered: {version}",
+                    file=sys.stderr,
+                )
+                return version
+    except Exception as e:
+        print(
+            f"  [warn] wizzair version discovery failed: {type(e).__name__}: {e}. "
+            f"Using fallback {WIZZAIR_VERSION_FALLBACK}.",
+            file=sys.stderr,
+        )
+
+    _WIZZAIR_API_VERSION = WIZZAIR_VERSION_FALLBACK
+    return WIZZAIR_VERSION_FALLBACK
+
+
+def _wizzair_fetch_fares(
+    origin: str, friday: dt.date, sunday: dt.date
+) -> dict:
+    """Query Wizz Air's /Api/search/timetable endpoint for one
+    weekend, per destination. Returns a dict with a `fares` list
+    containing synthetic round-trip fare entries that
+    _wizzair_normalise_fare consumes.
+
+    POST body shape (verified by OSS scrapers):
+      {
+        "flightList": [
+          {"departureStation": "DUB", "arrivalStation": "BUD",
+           "from": "2026-05-08", "to": "2026-05-08"},
+          {"departureStation": "BUD", "arrivalStation": "DUB",
+           "from": "2026-05-10", "to": "2026-05-10"}
+        ],
+        "priceType": "regular",
+        "adultCount": 1, "childCount": 0, "infantCount": 0
+      }
+
+    Response shape:
+      {
+        "outboundFlights": [
+          {
+            "flightNumber": "W62501",
+            "departureStation": "DUB",
+            "arrivalStation": "BUD",
+            "departureDate": "2026-05-08T18:30:00",
+            "arrivalDate": "2026-05-08T22:15:00",
+            "price": {"amount": 49.99, "currencyCode": "EUR"}
+          }, ...
+        ],
+        "returnFlights": [...]
+      }
+
+    Same 4-layer anti-hang defense as Aer Lingus: per-call watchdog,
+    per-route dead-list after 2 consecutive failures, wall-clock
+    budget cap, and hard curl_cffi requirement.
+    """
+    global _WIZZAIR_DISABLED, _WIZZAIR_START_TIME
+
+    if not _WIZZAIR_ENABLED:
+        return {"fares": []}
+    if _WIZZAIR_DISABLED:
+        return {"fares": []}
+    if not _CURL_CFFI_AVAILABLE:
+        _WIZZAIR_DISABLED = True
+        print(
+            "  [warn] wizzair: curl_cffi unavailable -- disabling.",
+            file=sys.stderr,
+        )
+        return {"fares": []}
+
+    if _WIZZAIR_START_TIME is None:
+        _WIZZAIR_START_TIME = time.time()
+    elapsed = time.time() - _WIZZAIR_START_TIME
+    if elapsed > _WIZZAIR_BUDGET_SECONDS:
+        _WIZZAIR_DISABLED = True
+        print(
+            f"  [warn] wizzair: budget of {_WIZZAIR_BUDGET_SECONDS:.0f}s "
+            f"exhausted ({elapsed:.0f}s elapsed) -- disabling.",
+            file=sys.stderr,
+        )
+        return {"fares": []}
+
+    destinations = WIZZAIR_DESTINATIONS.get(origin, [])
+    if not destinations:
+        return {"fares": []}
+
+    # Discover API version lazily on the first call of the run.
+    api_version = _wizzair_discover_api_version()
+    search_url = f"{WIZZAIR_BASE}/{api_version}/Api/search/timetable"
+
+    all_fares: list[dict] = []
+    dep_iso = friday.isoformat()
+    ret_iso = sunday.isoformat()
+
+    any_call_attempted = False
+
+    for dest in destinations:
+        route_key = (origin, dest)
+
+        if route_key in _WIZZAIR_DEAD_ROUTES:
+            continue
+        if not _CURL_CFFI_AVAILABLE:
+            _WIZZAIR_DISABLED = True
+            break
+        if time.time() - (_WIZZAIR_START_TIME or 0) > _WIZZAIR_BUDGET_SECONDS:
+            _WIZZAIR_DISABLED = True
+            break
+
+        any_call_attempted = True
+
+        payload = {
+            "flightList": [
+                {
+                    "departureStation": origin,
+                    "arrivalStation": dest,
+                    "from": dep_iso,
+                    "to": dep_iso,
+                },
+                {
+                    "departureStation": dest,
+                    "arrivalStation": origin,
+                    "from": ret_iso,
+                    "to": ret_iso,
+                },
+            ],
+            "priceType": "regular",
+            "adultCount": 1,
+            "childCount": 0,
+            "infantCount": 0,
+        }
+
+        failure_reason: str | None = None
+        data: dict | None = None
+        try:
+            resp = _http_post_with_watchdog(
+                search_url,
+                watchdog_seconds=_WIZZAIR_CALL_TIMEOUT + 2.0,
+                json=payload,
+                headers=WIZZAIR_HEADERS,
+                timeout=_WIZZAIR_CALL_TIMEOUT,
+                allow_plain_fallback=False,
+            )
+            status = getattr(resp, "status_code", None)
+            if status is None or status >= 400:
+                try:
+                    body_snippet = (resp.text or "")[:120].replace("\n", " ")
+                except Exception:
+                    body_snippet = ""
+                failure_reason = f"HTTP {status}"
+                _maybe_warn_wizzair(
+                    origin, dest, failure_reason,
+                    extra=f"body={body_snippet!r}" if body_snippet else None,
+                )
+            else:
+                data = resp.json()
+        except Exception as e:
+            failure_reason = f"{type(e).__name__}"
+            _maybe_warn_wizzair(origin, dest, failure_reason, extra=str(e)[:120])
+
+        if failure_reason is not None:
+            n = _WIZZAIR_ROUTE_FAILURES.get(route_key, 0) + 1
+            _WIZZAIR_ROUTE_FAILURES[route_key] = n
+            if n >= _WIZZAIR_ROUTE_FAIL_THRESHOLD:
+                _WIZZAIR_DEAD_ROUTES.add(route_key)
+                print(
+                    f"  [info] wizzair {origin}->{dest}: {n} consecutive "
+                    f"failures, skipping this route for the rest of the run.",
+                    file=sys.stderr,
+                )
+            continue
+
+        _WIZZAIR_ROUTE_FAILURES.pop(route_key, None)
+
+        if not isinstance(data, dict):
+            continue
+
+        out_flights = data.get("outboundFlights") or []
+        in_flights = data.get("returnFlights") or []
+        if not isinstance(out_flights, list) or not isinstance(in_flights, list):
+            continue
+        if not out_flights or not in_flights:
+            # No availability for this weekend on this route. Silent
+            # skip, not a failure.
+            continue
+
+        def _flight_price(f: dict) -> float | None:
+            p = f.get("price")
+            if isinstance(p, dict):
+                amt = p.get("amount")
+                if isinstance(amt, (int, float)):
+                    return float(amt)
+            # Fallback: some variants use `basePrice` or a flat number.
+            for key in ("basePrice", "totalPrice", "amount"):
+                v = f.get(key)
+                if isinstance(v, (int, float)):
+                    return float(v)
+                if isinstance(v, dict):
+                    amt = v.get("amount")
+                    if isinstance(amt, (int, float)):
+                        return float(amt)
+            return None
+
+        out_priced = [(f, _flight_price(f)) for f in out_flights if isinstance(f, dict)]
+        out_priced = [(f, p) for f, p in out_priced if p is not None]
+        in_priced = [(f, _flight_price(f)) for f in in_flights if isinstance(f, dict)]
+        in_priced = [(f, p) for f, p in in_priced if p is not None]
+
+        if not out_priced or not in_priced:
+            continue
+
+        out_priced.sort(key=lambda x: x[1])
+        in_priced.sort(key=lambda x: x[1])
+        out_flight, out_price = out_priced[0]
+        in_flight, in_price = in_priced[0]
+
+        all_fares.append({
+            "_origin": origin,
+            "_destination": dest,
+            "_total_price": out_price + in_price,
+            "_outbound_flight": out_flight,
+            "_inbound_flight": in_flight,
+        })
+
+        time.sleep(0.15)  # modest politeness delay
+
+    if any_call_attempted and not all_fares and not _WIZZAIR_DISABLED:
+        # First-weekend total failure: disable for the rest of the run.
+        _WIZZAIR_DISABLED = True
+        print(
+            "  [warn] wizzair: every call on first weekend failed -- "
+            "disabling for the rest of this run.",
+            file=sys.stderr,
+        )
+
+    return {"fares": all_fares}
+
+
+def _wizzair_normalise_fare(fare: dict, origin: str) -> dict | None:
+    """Turn a synthetic Wizz Air round-trip fare into our flat deal
+    schema. Input is the dict built by _wizzair_fetch_fares above.
+    """
+    try:
+        origin_iata = fare.get("_origin", origin)
+        dest_iata = fare.get("_destination")
+        total_price = fare.get("_total_price")
+        out_flight = fare.get("_outbound_flight") or {}
+        in_flight = fare.get("_inbound_flight") or {}
+
+        if dest_iata is None or total_price is None:
+            _reject_counts["missing_fields"] += 1
+            return None
+
+        out_dep = out_flight.get("departureDate") or out_flight.get("departureDateTime")
+        out_arr = out_flight.get("arrivalDate") or out_flight.get("arrivalDateTime")
+        in_dep = in_flight.get("departureDate") or in_flight.get("departureDateTime")
+        in_arr = in_flight.get("arrivalDate") or in_flight.get("arrivalDateTime")
+
+        if not out_dep or not in_dep:
+            _reject_counts["missing_fields"] += 1
+            return None
+
+        out_flight_num = out_flight.get("flightNumber") or "W6 ?"
+        in_flight_num = in_flight.get("flightNumber") or "W6 ?"
+
+        common = _apply_common_filters(
+            origin_iata, dest_iata, float(total_price), out_dep, in_dep
+        )
+        if common is None:
+            return None
+
+        return {
+            **common,
+            "currency": "EUR",
+            "outbound_departure": out_dep,
+            "outbound_arrival": out_arr or out_dep,
+            "outbound_flight_number": str(out_flight_num),
+            "inbound_departure": in_dep,
+            "inbound_arrival": in_arr or in_dep,
+            "inbound_flight_number": str(in_flight_num),
+            "carrier_code": "W6",
+            "carrier_name": "Wizz Air",
+            "google_flights_url": google_flights_url(
+                origin_iata, dest_iata, out_dep[:10], in_dep[:10]
+            ),
+            "skyscanner_url": skyscanner_url(
+                origin_iata, dest_iata, out_dep[:10], in_dep[:10]
+            ),
+        }
+    except Exception as e:
+        _reject_counts["missing_fields"] += 1
+        print(f"  [warn] wizzair normalise failed: {e}", file=sys.stderr)
+        return None
+
+
 # ---------- Source registry ----------
 # Each entry drives one pass through the main scan loop. `fetch`
 # takes (origin, friday, sunday) and returns a dict with a `fares`
@@ -1768,6 +2284,21 @@ if _EASYJET_ENABLED:
         "label": "easyJet (U2)",
         "fetch": _easyjet_fetch_fares,
         "normalise": _easyjet_normalise_fare,
+        "windows": ["fri_sun"],
+        "max_weekends": 3,
+    })
+
+# Wizz Air is opt-in via ENABLE_WIZZAIR. Same trimming as easyJet:
+# fri_sun only, 3 upcoming weekends, so worst-case call budget is
+# ~20 destinations x 3 weekends = 60 calls, bounded at ~7s each
+# under the watchdog = ~420s in the worst case. The 150s wall-
+# clock budget inside _wizzair_fetch_fares clamps it further.
+if _WIZZAIR_ENABLED:
+    SOURCES.append({
+        "name": "wizzair",
+        "label": "Wizz Air (W6)",
+        "fetch": _wizzair_fetch_fares,
+        "normalise": _wizzair_normalise_fare,
         "windows": ["fri_sun"],
         "max_weekends": 3,
     })
@@ -1979,7 +2510,7 @@ def _clear_scan_watchdog() -> None:
 # shows behaviour that doesn't match this ID's claimed features,
 # the runner is executing stale code. Look for this exact string
 # in the log to know which build is live.
-SCANNER_BUILD_ID = "build-2026-04-10.9 (easyJet opt-in U2, enrich 90s, AL=3w)"
+SCANNER_BUILD_ID = "build-2026-04-10.10 (Wizz Air opt-in W6, easyJet opt-in U2, enrich 90s)"
 
 
 def _run() -> int:
