@@ -206,6 +206,29 @@ let historyByKey = {};
 // exclude some weekends and change the min/max colouring.
 let destWeekendMatrix = {};
 
+// Destination vibe tags loaded from destination_tags.json. Shape:
+// { "BCN": ["city-break", "beach", "cultural", "food", "party"],
+//   "KRK": ["city-break", "cultural", "cheap", "food"], ... }
+// Used by the vibe-chip filter row. Empty {} until loadDestTags()
+// resolves -- vibe chips simply don't render until the file lands.
+let destTagsByIata = {};
+
+// Per-country cost-of-living estimates loaded from
+// cost_of_living.json. Shape:
+// { "Spain": {hotel_per_night_eur, food_per_day_eur, ...}, ... }
+// The _default entry is used as a fallback for any country we
+// haven't curated. Used by estimateTripTotal() to compute the
+// weekend trip cost shown on each deal card.
+let costOfLiving = {};
+// User's preference for showing/hiding trip cost. Stored in
+// localStorage so it persists across page loads.
+let showTripCost = false;
+
+// Active vibe filter -- null = all vibes. Set by clicking a
+// vibe chip. Persisted to localStorage + URL like the other
+// filter state.
+let activeVibe = null;
+
 // Comparison tray: Set of dealKey strings the user has checked for
 // side-by-side comparison. Capped at COMPARE_MAX_ITEMS deals to
 // keep the modal usable. Persists across filter changes so you can
@@ -393,6 +416,75 @@ async function loadHistory() {
   } catch (e) {
     return {};
   }
+}
+
+// Load static destination-tag and cost-of-living JSON files. Both
+// are committed to the dashboard/ directory and updated by hand as
+// we expand coverage. Empty-object fallback on failure so the
+// dashboard renders cleanly even if we delete the files.
+async function loadDestTags() {
+  try {
+    const res = await fetch("destination_tags.json", { cache: "force-cache" });
+    if (!res.ok) return {};
+    const data = await res.json();
+    if (!data || typeof data !== "object") return {};
+    // Strip the _comment and _valid_tags meta entries -- they're
+    // documentation for whoever edits the file, not real IATA keys.
+    const clean = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (k.startsWith("_")) continue;
+      if (Array.isArray(v)) clean[k] = v;
+    }
+    return clean;
+  } catch (e) {
+    return {};
+  }
+}
+
+async function loadCostOfLiving() {
+  try {
+    const res = await fetch("cost_of_living.json", { cache: "force-cache" });
+    if (!res.ok) return {};
+    const data = await res.json();
+    return (data && typeof data === "object") ? data : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+// Compute a rough "total weekend trip cost" estimate for a deal.
+// Returns null if we don't have enough data (missing price, missing
+// country cost entry). Components:
+//   flight          the flight_price_eur from the scanner
+//   bus             Dublin-only Limerick bus surcharge
+//   hotel           2 nights at the country's mid-range 3-star rate
+//   food            3 days of food budget (Fri arr, Sat full, Sun dep)
+//   local_transport 3 days of public transit / short taxi
+//
+// The cost_of_living.json file is curated by country, so two
+// destinations in the same country share the same hotel/food/
+// transport numbers. The _default fallback catches destinations
+// in countries we haven't curated yet.
+function estimateTripTotal(deal) {
+  const flight = dealPrice(deal);
+  if (!isFinite(flight)) return null;
+  const country = deal.destination_country || "";
+  const entry = costOfLiving[country] || costOfLiving._default;
+  if (!entry) return null;
+  const hotel = (entry.hotel_per_night_eur || 0) * 2;   // 2 nights
+  const food = (entry.food_per_day_eur || 0) * 3;       // 3 days
+  const transit = (entry.transport_per_day_eur || 0) * 3;
+  const bus = deal.bus_surcharge_eur || 0;
+  const total = Math.round(flight + hotel + food + transit + bus);
+  return {
+    total,
+    flight: Math.round(flight),
+    hotel: Math.round(hotel),
+    food: Math.round(food),
+    transit: Math.round(transit),
+    bus: Math.round(bus),
+    countryMatched: country in costOfLiving,
+  };
 }
 
 // Build a { iata: [{week, price}, ...] } map from the full deal
@@ -686,6 +778,18 @@ function renderDealCard(deal, idx) {
   const heatmapEntries = destWeekendMatrix[deal.destination_iata] || [];
   const heatmapHtml = heatmapSvg(heatmapEntries, activeWeek);
 
+  // Trip cost estimate. Only rendered when the user has the
+  // "Show trip cost" toggle on AND we have a country match in
+  // cost_of_living.json. Falls back silently otherwise so a
+  // missing country doesn't break the card layout.
+  const costEstimate = showTripCost ? estimateTripTotal(deal) : null;
+  const costHtml = costEstimate
+    ? `<div class="trip-cost" title="Rough weekend trip estimate: flight + 2 nights hotel + 3 days food + local transport${costEstimate.bus ? ' + Limerick bus' : ''}. Country-level averages, not quotes.">
+         <span class="trip-cost-total">~&euro;${costEstimate.total} <span class="trip-cost-label">all-in</span></span>
+         <span class="trip-cost-breakdown">&euro;${costEstimate.flight} flight &middot; &euro;${costEstimate.hotel} hotel &middot; &euro;${costEstimate.food + costEstimate.transit} food/transit${costEstimate.bus ? ` &middot; &euro;${costEstimate.bus} bus` : ""}</span>
+       </div>`
+    : "";
+
   // Compare checkbox state (rendered checked if this deal is in
   // the comparedKeys set).
   const isCompared = comparedKeys.has(thisDealKey);
@@ -707,6 +811,7 @@ function renderDealCard(deal, idx) {
         ${trendHtml}
       </div>
     </div>
+    ${costHtml}
     <div class="meta-row">
       <span class="badge ${(deal.origin || "").toLowerCase()}">${ORIGIN_LABEL[deal.origin] || deal.origin || "?"}</span>
       ${deal.carrier_code ? `<span class="badge carrier carrier-${deal.carrier_code.toLowerCase()}">${deal.carrier_code}</span>` : ""}
@@ -835,16 +940,23 @@ async function main() {
 
   let payload;
   try {
-    // Load deals and history in parallel. history.json is optional --
-    // if it doesn't exist yet (e.g. first scan after deploy) the
-    // sparklines simply don't render, nothing breaks. historyByKey
-    // is the module-level global read by renderDealCard.
-    const [dealsResult, historyResult] = await Promise.all([
-      loadDeals(),
-      loadHistory(),
-    ]);
+    // Load deals, history, vibe tags, and cost-of-living data in
+    // parallel. Only deals.json is strictly required -- the other
+    // three files are optional and degrade gracefully (empty {})
+    // if they don't exist. historyByKey, destTagsByIata, and
+    // costOfLiving are module-level globals read by downstream
+    // rendering functions.
+    const [dealsResult, historyResult, tagsResult, costResult] =
+      await Promise.all([
+        loadDeals(),
+        loadHistory(),
+        loadDestTags(),
+        loadCostOfLiving(),
+      ]);
     payload = dealsResult;
     historyByKey = historyResult;
+    destTagsByIata = tagsResult;
+    costOfLiving = costResult;
   } catch (e) {
     console.error(e);
     metaEl.textContent = "Unable to load deals.json";
@@ -929,6 +1041,7 @@ async function main() {
       sortMode: $("sort").value,
       windows: enabledWindows,
       region: activeRegion,
+      vibe: activeVibe,
       search: currentSearchQuery(),
     };
   }
@@ -1056,6 +1169,14 @@ async function main() {
       if (f.windows.size > 0 && !f.windows.has(win)) return false;
       // Region filter: null = all regions.
       if (f.region && regionOf(d.destination_country) !== f.region) return false;
+      // Vibe filter: destination must be tagged with the selected
+      // vibe. Destinations with no tag entry in destTagsByIata
+      // are hidden when a vibe filter is active (assumes unknown
+      // = not tagged for this vibe).
+      if (f.vibe) {
+        const tags = destTagsByIata[d.destination_iata];
+        if (!Array.isArray(tags) || !tags.includes(f.vibe)) return false;
+      }
       // Text search: match against city, country, or IATA (all lower-cased).
       if (f.search) {
         const hay = (
@@ -1120,6 +1241,98 @@ async function main() {
     }
   }
 
+  // Display order for vibe chips. Determined by a fixed order
+  // (beach first because that's the most common query) rather
+  // than alphabetical so the UI stays consistent.
+  const VIBE_ORDER = [
+    "beach",
+    "city-break",
+    "cultural",
+    "food",
+    "party",
+    "ski",
+    "island",
+    "nature",
+    "outdoors",
+    "cheap",
+  ];
+  const VIBE_LABEL = {
+    "beach": "\u{1F3D6} Beach",
+    "city-break": "\u{1F307} City break",
+    "cultural": "\u{1F3DB} Cultural",
+    "food": "\u{1F371} Food",
+    "party": "\u{1F389} Party",
+    "ski": "\u{1F3BF} Ski",
+    "island": "\u{1F334} Island",
+    "nature": "\u{1F332} Nature",
+    "outdoors": "\u{1F3D4} Outdoors",
+    "cheap": "\u{1F4B0} Cheap",
+  };
+
+  // Count deals per vibe respecting all OTHER filters, so the
+  // chip counts reflect what toggling that single vibe would
+  // produce. Destinations with no tag entry don't count toward
+  // any vibe.
+  function computeVibeCounts() {
+    const f = currentFilters();
+    const noVibeFilter = { ...f, vibe: null };
+    const candidates = applyFilters(payload.deals, noVibeFilter);
+    const counts = {};
+    for (const d of candidates) {
+      const tags = destTagsByIata[d.destination_iata] || [];
+      for (const tag of tags) {
+        counts[tag] = (counts[tag] || 0) + 1;
+      }
+    }
+    return counts;
+  }
+
+  // Render the vibe chip row. Hidden entirely if we have no tag
+  // data loaded (e.g. the destination_tags.json file is absent).
+  function renderVibeChips() {
+    const container = $("vibe-chips");
+    if (!container) return;
+    if (Object.keys(destTagsByIata).length === 0) {
+      container.style.display = "none";
+      return;
+    }
+    container.style.display = "";
+    const counts = computeVibeCounts();
+    container.innerHTML = "";
+
+    // Only show chips for vibes that have at least 1 matching
+    // destination under the current (non-vibe) filters. Skips
+    // empty vibes so the chip row stays relevant.
+    const populated = VIBE_ORDER.filter((v) => (counts[v] || 0) > 0);
+    if (populated.length === 0) {
+      container.style.display = "none";
+      return;
+    }
+
+    // "Any vibe" chip
+    const allChip = document.createElement("div");
+    allChip.className = "vibe-chip" + (activeVibe === null ? " active" : "");
+    allChip.innerHTML = "Any vibe";
+    allChip.addEventListener("click", () => {
+      activeVibe = null;
+      render();
+    });
+    container.appendChild(allChip);
+
+    // Individual vibe chips
+    for (const vibe of populated) {
+      const n = counts[vibe];
+      const chip = document.createElement("div");
+      chip.className = "vibe-chip" + (activeVibe === vibe ? " active" : "");
+      chip.innerHTML = `${VIBE_LABEL[vibe] || vibe} <span class="count">${n}</span>`;
+      chip.addEventListener("click", () => {
+        activeVibe = activeVibe === vibe ? null : vibe;
+        render();
+      });
+      container.appendChild(chip);
+    }
+  }
+
   // --- URL state persistence -----------------------------------------
   // Reflects filter state in the URL querystring so bookmarks and
   // "share this view" links work. Writes via history.replaceState
@@ -1148,6 +1361,9 @@ async function main() {
 
     // Region: only if set.
     if (f.region) params.set("region", f.region);
+
+    // Vibe: only if set.
+    if (f.vibe) params.set("vibe", f.vibe);
 
     // Search query: only if non-empty.
     if (f.search) params.set("q", f.search);
@@ -1206,6 +1422,11 @@ async function main() {
     const regionParam = params.get("region");
     if (regionParam && REGION_ORDER.includes(regionParam)) {
       activeRegion = regionParam;
+    }
+
+    const vibeParam = params.get("vibe");
+    if (vibeParam) {
+      activeVibe = vibeParam;
     }
 
     const qParam = params.get("q");
@@ -1516,6 +1737,7 @@ async function main() {
     enabledWindows.clear();
     enabledWindows.add("fri_sun");
     activeRegion = null;
+    activeVibe = null;
     selectedDestination = null;
   }
 
@@ -1531,6 +1753,7 @@ async function main() {
     updateMeta(filtered.length, payload.deals.length);
     renderWindowChips();
     renderRegionChips();
+    renderVibeChips();
     renderMapMarkers(filtered);
     renderSidebar(filtered, f.sortMode);
     updateCompareTrayButton();
@@ -1780,6 +2003,29 @@ async function main() {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) pollForUpdates();
   });
+
+  // Trip-cost toggle: read saved state from localStorage and wire
+  // the change handler. Persisted separately from URL state because
+  // it's a per-browser preference, not a shareable filter.
+  const tripCostEl = $("trip-cost-toggle");
+  if (tripCostEl) {
+    try {
+      const saved = localStorage.getItem("show_trip_cost");
+      showTripCost = saved === "true";
+      tripCostEl.checked = showTripCost;
+    } catch (e) {
+      // localStorage disabled (private mode, etc.) -- start off.
+    }
+    tripCostEl.addEventListener("change", () => {
+      showTripCost = tripCostEl.checked;
+      try {
+        localStorage.setItem("show_trip_cost", String(showTripCost));
+      } catch (e) {
+        // Non-fatal -- the toggle still works in-session.
+      }
+      render();
+    });
+  }
 
   // Apply URL-state BEFORE the first render so the dashboard comes up
   // with the bookmarked filters already in place. Also handles the
