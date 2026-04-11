@@ -96,38 +96,6 @@ main {
   letter-spacing: 1px;
 }
 
-.view-mode-row {
-  display: flex;
-  gap: 4px;
-  margin: 8px 0;
-  background: #0f172a;
-  border: 1px solid #334155;
-  border-radius: 6px;
-  padding: 2px;
-}
-.view-mode-pill {
-  flex: 1;
-  cursor: pointer;
-  user-select: none;
-}
-.view-mode-pill input[type="radio"] {
-  display: none;
-}
-.view-mode-pill span {
-  display: block;
-  text-align: center;
-  padding: 6px 4px;
-  font-size: 11px;
-  color: #94a3b8;
-  border-radius: 4px;
-  transition: background-color .12s, color .12s;
-}
-.view-mode-pill input[type="radio"]:checked + span {
-  background: #0ea5e9;
-  color: #0f172a;
-  font-weight: 600;
-}
-
 .compare-tray-btn {
   display: block;
   width: 100%;
@@ -500,6 +468,29 @@ main {
 .deal.highlighted {
   border-color: #facc15;
   box-shadow: 0 0 0 2px rgba(250, 204, 21, .25);
+}
+
+/* Brighter, animated glow for recommend-button picks. Much more
+   visible than the plain yellow outline above so the user can
+   actually see what the button did. */
+.deal.highlighted-strong {
+  border-color: #4ade80;
+  box-shadow:
+    0 0 0 3px rgba(74, 222, 128, .55),
+    0 0 18px rgba(74, 222, 128, .35);
+  animation: rec-pulse 1.2s ease-in-out 2;
+}
+@keyframes rec-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 3px rgba(74, 222, 128, .55),
+      0 0 18px rgba(74, 222, 128, .35);
+  }
+  50% {
+    box-shadow:
+      0 0 0 6px rgba(74, 222, 128, .7),
+      0 0 30px rgba(74, 222, 128, .55);
+  }
 }
 
 .deal .top {

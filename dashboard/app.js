@@ -205,10 +205,6 @@ let historyByKey = {};
 const COMPARE_MAX_ITEMS = 3;
 let comparedKeys = new Set();
 
-// Display mode: "all" shows every matching deal, "best" collapses
-// by destination and shows only the cheapest weekend per city.
-let displayMode = "all";
-
 async function loadExchangeRates() {
   const cached = localStorage.getItem(CURRENCY_STORAGE_KEY);
   const today = new Date().toISOString().slice(0, 10);
@@ -598,7 +594,7 @@ function renderDealCard(deal, idx) {
       </div>
     </div>
     <div class="meta-row">
-      <span class="badge ${deal.origin.toLowerCase()}">${ORIGIN_LABEL[deal.origin]}</span>
+      <span class="badge ${(deal.origin || "").toLowerCase()}">${ORIGIN_LABEL[deal.origin] || deal.origin || "?"}</span>
       ${deal.carrier_code ? `<span class="badge carrier carrier-${deal.carrier_code.toLowerCase()}">${deal.carrier_code}</span>` : ""}
       ${deal.weekend_window_label ? `<span class="badge window">${deal.weekend_window_label}</span>` : ""}
       ${deal.weather_emoji ? `<span class="weather-pill" title="${deal.weather_text || ""}">${deal.weather_emoji} ${deal.weather_high_c != null ? Math.round(deal.weather_high_c) + "&deg;" : ""}${deal.weather_low_c != null ? " / " + Math.round(deal.weather_low_c) + "&deg;" : ""}</span>` : ""}
@@ -795,23 +791,6 @@ async function main() {
       region: activeRegion,
       search: currentSearchQuery(),
     };
-  }
-
-  // Collapse deals to just the cheapest weekend per destination.
-  // Used when displayMode === "best" so the user sees ~one card per
-  // city (the sweet spot) rather than one card per weekend per city.
-  // Returns a new array; does not mutate input.
-  function bestWeekendPerDest(deals) {
-    const byIata = new Map();
-    for (const d of deals) {
-      const iata = d.destination_iata;
-      if (!iata) continue;
-      const existing = byIata.get(iata);
-      if (!existing || dealPrice(d) < dealPrice(existing)) {
-        byIata.set(iata, d);
-      }
-    }
-    return Array.from(byIata.values());
   }
 
   // Show/hide + update count on the "Compare N" button in the
@@ -1334,22 +1313,12 @@ async function main() {
 
   function render() {
     const f = currentFilters();
-    let filtered = applyFilters(payload.deals, f);
-
-    // Best-weekend-per-destination collapse. Applied AFTER filtering
-    // so the "cheapest per city" respects the user's current price
-    // cap, region, origin, and search filters. Map markers always
-    // use the full filtered list (the map already groups by IATA
-    // internally in renderMapMarkers).
-    const sidebarDeals = displayMode === "best"
-      ? bestWeekendPerDest(filtered)
-      : filtered;
-
+    const filtered = applyFilters(payload.deals, f);
     updateMeta(filtered.length, payload.deals.length);
     renderWindowChips();
     renderRegionChips();
     renderMapMarkers(filtered);
-    renderSidebar(sidebarDeals, f.sortMode);
+    renderSidebar(filtered, f.sortMode);
     updateCompareTrayButton();
     syncUrlState();
   }
@@ -1382,16 +1351,6 @@ async function main() {
     bhxCheckbox.addEventListener("change", render);
   }
   $("sort").addEventListener("change", render);
-
-  // View-mode radio buttons: "All weekends" vs "Best weekend per city".
-  document.querySelectorAll('input[name="view-mode"]').forEach((r) => {
-    r.addEventListener("change", () => {
-      if (r.checked) {
-        displayMode = r.value;
-        render();
-      }
-    });
-  });
 
   // Compare tray + modal wiring.
   const openCompareBtn = $("open-compare");
@@ -1453,102 +1412,121 @@ async function main() {
   // pass the current filters so origin / slider / window settings
   // still apply.
   $("recommend-me").addEventListener("click", () => {
+    console.log("[recommend] clicked");
     const f = currentFilters();
     const candidates = applyFilters(payload.deals, f);
-    if (candidates.length === 0) return;
+    console.log(`[recommend] ${candidates.length} candidates match filters`);
+    if (candidates.length === 0) {
+      showToast("No deals match filters -- try clearing some");
+      return;
+    }
 
     // Score each candidate: lower is better.
-    //   base    = flight price
-    //   weather = bonus if weather emoji is a sun / partly cloudy,
-    //             penalty for rain / thunder / fog
-    //   jitter  = small random component so the same "best" set
-    //             doesn't come up every click
-    //
-    // NOTE on emoji literals: Python's \U0001F327 escape does NOT
-    // work in JS strings -- backslash-capital-U isn't a recognized
-    // escape, so "\U0001F327".includes check is searching for the
-    // literal text "U0001F327" and never matches. We use the actual
-    // emoji characters directly instead, which matches the exact
-    // Unicode code points that enrichments.py WMO_CODE_MAP emits.
+    //   base       = flight price
+    //   weather    = bonus/penalty based on weather emoji
+    //   diversity  = bonus for destinations we haven't picked yet
+    //                (stops "3 different Barcelona weekends")
+    //   jitter     = random component so repeated clicks vary
+    const pickedIatas = new Set();
     const scored = candidates.map((d) => {
       const price = dealPrice(d);
       let score = price;
       const emoji = d.weather_emoji || "";
-      // Sun / clear / partly-cloudy -> score bonus.
-      // U+2600 (sun), U+26C5 (sun behind cloud), U+1F324 (sun behind small cloud)
-      if (emoji.includes("\u2600") || emoji.includes("\u26C5") || emoji.includes("\uD83C\uDF24")) {
-        score -= 15;
-      }
-      // Overcast / fog -> small penalty.
-      // U+2601 (cloud), U+1F32B (fog)
-      if (emoji.includes("\u2601") || emoji.includes("\uD83C\uDF2B")) {
-        score += 5;
-      }
-      // Any kind of rain / showers -> heavier penalty.
-      // U+1F327 (cloud with rain), U+1F326 (sun behind rain cloud)
-      if (emoji.includes("\uD83C\uDF27") || emoji.includes("\uD83C\uDF26")) {
-        score += 15;
-      }
-      // Snow -> moderate penalty (depends on your tastes; ski trip bonus?).
-      // U+1F328 (cloud with snow)
-      if (emoji.includes("\uD83C\uDF28")) {
-        score += 10;
-      }
-      // Thunder -> big penalty.
-      // U+26C8 (cloud with lightning and rain)
-      if (emoji.includes("\u26C8")) {
-        score += 25;
-      }
-      // Tiny random jitter so repeated clicks surface variety.
-      score += Math.random() * 20;
+      if (emoji.includes("\u2600") || emoji.includes("\u26C5") || emoji.includes("\uD83C\uDF24")) score -= 15;
+      if (emoji.includes("\u2601") || emoji.includes("\uD83C\uDF2B")) score += 5;
+      if (emoji.includes("\uD83C\uDF27") || emoji.includes("\uD83C\uDF26")) score += 15;
+      if (emoji.includes("\uD83C\uDF28")) score += 10;
+      if (emoji.includes("\u26C8")) score += 25;
+      score += Math.random() * 30;  // slightly wider jitter for more variety
       return { deal: d, score };
     });
     scored.sort((a, b) => a.score - b.score);
-    const picks = scored.slice(0, 3).map((s) => s.deal);
 
-    // Clear any prior destination pin so the picks are visible in
-    // the full filtered list, then re-render.
+    // Diversity filter: walk the sorted list and only keep one pick
+    // per destination IATA. Otherwise the top 3 can be 3 different
+    // Barcelona weekends, which defeats the "surprise me" vibe.
+    const picks = [];
+    for (const s of scored) {
+      if (picks.length >= 3) break;
+      const iata = s.deal.destination_iata;
+      if (pickedIatas.has(iata)) continue;
+      pickedIatas.add(iata);
+      picks.push(s.deal);
+    }
+    console.log(`[recommend] picks:`, picks.map((p) => `${p.destination_city} (€${dealPrice(p)})`));
+
+    if (picks.length === 0) return;
+
+    // Clear any filters that would hide the picks from the user:
+    // the destination pin and the text search. Keep origin / price /
+    // window filters so the user's explicit choices still apply.
     selectedDestination = null;
+    const searchBox = $("search-box");
+    if (searchBox && searchBox.value) {
+      searchBox.value = "";
+    }
     render();
 
+    // Toast with the three pick names so the user gets immediate
+    // visible feedback regardless of whether they notice the
+    // highlight/scroll animation.
+    const pickNames = picks.map((p) => p.destination_city || p.destination_iata);
+    showToast(`Suggested: ${pickNames.join(", ")}`);
+
     // After render has populated the list, match each pick to its
-    // card by stable deal key (not by city-name text match, which
-    // was fragile and why the old button appeared broken) and:
-    //   * add .highlighted to the card (green glow for 3.5s)
-    //   * scroll the first pick into view
+    // card by stable deal key and:
+    //   * scroll the first pick into view (works even if already
+    //     at top -- window.scrollIntoView is a no-op in that case)
+    //   * add .highlighted-strong to all three for a brighter glow
     //   * pan the map to fit all three picks
     setTimeout(() => {
       const pickKeys = new Set(picks.map(dealKey));
       const cards = Array.from(listEl.querySelectorAll(".deal"));
       const matchedCards = cards.filter((c) => pickKeys.has(c.dataset.dealKey));
+      console.log(`[recommend] matched ${matchedCards.length} of ${picks.length} cards in DOM`);
 
       if (matchedCards.length === 0) {
-        // Picks didn't end up in the visible list (shouldn't happen
-        // given they come from applyFilters, but defensive).
-        console.warn("Recommend: no matched cards for picks", picks);
+        console.warn("[recommend] no matched cards -- picks may not be in visible list. picks:", picks, "pickKeys:", Array.from(pickKeys));
+        // Defensive fallback: pan the map to the first pick's coords
+        // so at least SOMETHING visible happens.
+        const firstCoords = picks.find(
+          (p) => p.destination_lat != null && p.destination_lon != null
+        );
+        if (firstCoords && typeof map !== "undefined" && map) {
+          map.panTo([firstCoords.destination_lat, firstCoords.destination_lon], { animate: true });
+        }
         return;
       }
 
+      // Scroll the first matched card into view with a delay so the
+      // highlight animation is visible as it enters the viewport.
       matchedCards[0].scrollIntoView({ behavior: "smooth", block: "center" });
-      matchedCards.forEach((card) => {
-        card.classList.add("highlighted");
-        setTimeout(() => card.classList.remove("highlighted"), 3500);
+      matchedCards.forEach((card, i) => {
+        // Stagger the highlight classes slightly so the user's eye
+        // tracks them one-by-one instead of all flashing simultaneously.
+        setTimeout(() => {
+          card.classList.add("highlighted", "highlighted-strong");
+          setTimeout(() => {
+            card.classList.remove("highlighted", "highlighted-strong");
+          }, 4000);
+        }, i * 250);
       });
 
-      // Pan the map to fit the three picks if all have coordinates.
+      // Pan the map to fit all three picks.
       const coords = picks
         .filter((p) => p.destination_lat != null && p.destination_lon != null)
         .map((p) => [p.destination_lat, p.destination_lon]);
       if (coords.length > 0 && typeof map !== "undefined" && map) {
         try {
           const bounds = L.latLngBounds(coords);
-          map.fitBounds(bounds.pad(0.3), { maxZoom: 6, animate: true });
+          map.fitBounds(bounds.pad(0.4), { maxZoom: 6, animate: true });
         } catch (e) {
-          // Leaflet not ready or bounds invalid -- silently ignore,
-          // the highlight + scroll already happened.
+          // Leaflet not ready or bounds invalid -- the highlight +
+          // scroll + toast already happened, so we've delivered
+          // some visible response.
         }
       }
-    }, 60);
+    }, 80);
   });
 
   // Mobile sidebar toggle: on narrow screens the sidebar slides in
