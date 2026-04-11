@@ -210,10 +210,13 @@ def _http_post_with_watchdog(url: str, watchdog_seconds: float, **kwargs):
 # ---------- Config ----------
 # Upper bound for the scanner's flight-price filter (applied to
 # Ryanair's raw round-trip fare, NOT the Limerick-bus-adjusted number).
-# The dashboard renders a slider defaulting to EUR 100 that re-filters
-# the already-loaded deals client-side, so EUR 150 here gives the user
-# 50 euro of slack either way without re-running the scan.
-PRICE_CAP_EUR = 150.0
+# The dashboard slider reads this value from payload.price_cap_eur
+# and uses it as its own max, so the client-side filter covers the
+# whole range the scanner collected. Raising this cap surfaces more
+# Mediterranean / Italian / Nordic routes that currently miss --
+# user's sidebar slider still lets them narrow back to whatever
+# personal cap they want.
+PRICE_CAP_EUR = 200.0
 # Approx Limerick <-> Dublin return via Bus Eireann / Citylink / Dublin Coach.
 # NOT added to flight_price_eur anymore -- shown separately on the card
 # as an informational note so Dublin and Shannon are compared on raw
@@ -228,7 +231,12 @@ BUS_RETURN_COST_EUR = 30.0
 # case; users departing from SNN (already in Shannon) or BHX (already
 # in Birmingham) don't pay it.
 ORIGINS = ["SNN", "DUB", "BHX"]
-WEEKENDS_AHEAD = 26       # Scan ~6 months of upcoming weekends (live mode).
+WEEKENDS_AHEAD = 39       # Scan ~9 months of upcoming weekends (live mode).
+                          # Ryanair publishes schedules 11 months out, so 39
+                          # comfortably stays within published data. Bumping
+                          # from 26 adds ~50% more scanner calls -- runtime
+                          # goes from ~5 min to ~6 min, well inside the
+                          # SCAN_WALL_CLOCK_SECONDS = 600s SIGALRM cap.
 
 # Friday evening departures and Sunday afternoon/evening returns.
 OUTBOUND_FROM = "16:00"
@@ -2514,7 +2522,7 @@ def _clear_scan_watchdog() -> None:
 # shows behaviour that doesn't match this ID's claimed features,
 # the runner is executing stale code. Look for this exact string
 # in the log to know which build is live.
-SCANNER_BUILD_ID = "build-2026-04-10.10 (Wizz Air opt-in W6, easyJet opt-in U2, enrich 90s)"
+SCANNER_BUILD_ID = "build-2026-04-10.11 (cap=EUR200, horizon=39w, Wizz+easyJet opt-in)"
 
 
 def _run() -> int:

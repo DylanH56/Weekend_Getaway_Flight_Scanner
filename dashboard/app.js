@@ -1750,7 +1750,10 @@ async function main() {
       const origins = [f.showSNN, f.showDUB, f.showBHX].filter(Boolean).length;
       const hiddenCount = payload.deals.length;
       const hints = [];
-      if (f.maxPrice < 150) hints.push(`raising the price slider (currently &euro;${f.maxPrice})`);
+      // Only suggest raising the slider if it's actually constrained
+      // below the scanner's cap.
+      const serverCap = Math.round(Number(payload.price_cap_eur) || 200);
+      if (f.maxPrice < serverCap) hints.push(`raising the price slider (currently &euro;${f.maxPrice})`);
       if (origins < 3) hints.push("enabling more origin airports");
       if (f.region) hints.push(`clearing the <b>${f.region}</b> region filter`);
       if (f.search) hints.push(`clearing the search for <b>"${f.search.replace(/</g, "&lt;")}"</b>`);
@@ -1807,10 +1810,17 @@ async function main() {
     const snn = $("filter-snn"); if (snn) snn.checked = true;
     const dub = $("filter-dub"); if (dub) dub.checked = true;
     const bhx = $("filter-bhx"); if (bhx) bhx.checked = true;
+    // Reset the slider to whatever max the scanner currently
+    // reports (via payload.price_cap_eur, which we mirrored into
+    // slider.max at init time). This keeps "Reset" aligned with
+    // the cap even as the scanner bumps it.
     const slider = $("price-max");
     const label = $("price-max-label");
-    if (slider) slider.value = "150";
-    if (label) label.innerHTML = "&euro;150";
+    if (slider) {
+      const max = slider.max || "200";
+      slider.value = max;
+      if (label) label.innerHTML = `&euro;${max}`;
+    }
     const searchBox = $("search-box");
     if (searchBox) searchBox.value = "";
     enabledWindows.clear();
@@ -1840,10 +1850,30 @@ async function main() {
     syncUrlState();
   }
 
-  // Slider label live-updates as you drag; map+sidebar re-render on every change.
+  // Slider label live-updates as you drag; map+sidebar re-render on
+  // every change. Max and top-end tick are set dynamically from
+  // payload.price_cap_eur so raising the scanner's cap automatically
+  // extends the slider without needing a dashboard code change.
   const priceSlider = $("price-max");
   const priceLabel = $("price-max-label");
+  const priceMaxTick = $("price-max-tick");
   if (priceSlider && priceLabel) {
+    // Sync slider max to whatever the scanner actually collected.
+    // Clamp to a sane floor (100) so a broken payload can't break
+    // the slider entirely.
+    const serverCap = Math.max(
+      100,
+      Math.round(Number(payload.price_cap_eur) || 200)
+    );
+    priceSlider.max = String(serverCap);
+    if (priceMaxTick) priceMaxTick.innerHTML = `&euro;${serverCap}`;
+    // If the current value exceeds the new max (e.g. an old URL
+    // state carried over a higher number), clamp it.
+    const currentVal = parseInt(priceSlider.value, 10);
+    if (isFinite(currentVal) && currentVal > serverCap) {
+      priceSlider.value = String(serverCap);
+      priceLabel.innerHTML = `&euro;${serverCap}`;
+    }
     priceSlider.addEventListener("input", () => {
       priceLabel.innerHTML = `&euro;${priceSlider.value}`;
       render();
@@ -1854,10 +1884,10 @@ async function main() {
   if (payload.mode === "prospects") {
     const sel = $("sort");
     if (sel && sel.value === "price") sel.value = "date";
-    // Max slider to 150 isn't meaningful with null prices; open it fully.
+    // Slider max isn't meaningful with null prices; open it fully.
     if (priceSlider) {
-      priceSlider.value = "150";
-      priceLabel.innerHTML = "&euro;150";
+      priceSlider.value = priceSlider.max;
+      priceLabel.innerHTML = `&euro;${priceSlider.max}`;
     }
   }
 
