@@ -799,8 +799,14 @@ function renderDealCard(deal, idx) {
       <div class="top-left">
         <div class="city">${deal.destination_city || deal.destination_iata}</div>
         <div class="country">${deal.destination_country || ""} &middot; ${deal.destination_iata}</div>
-        ${sparklineHtml ? `<div class="sparkline-wrap" title="60-day price history">${sparklineHtml}</div>` : ""}
-        ${heatmapHtml ? `<div class="heatmap-wrap" title="Prices across upcoming weekends (green = cheapest)">${heatmapHtml}</div>` : ""}
+        ${sparklineHtml ? `<div class="sparkline-wrap" title="60-day price history for this exact route (green trend = dropping, red = rising)">
+          <div class="chart-label">60-day trend</div>
+          ${sparklineHtml}
+        </div>` : ""}
+        ${heatmapHtml ? `<div class="heatmap-wrap" title="Compare prices for this destination across upcoming weekends. Click a cell to jump to that weekend. White outline = this deal's weekend.">
+          <div class="chart-label">Next weekends <span class="muted">· cheap <span class="arrow">&rarr;</span> pricey</span></div>
+          ${heatmapHtml}
+        </div>` : ""}
       </div>
       <div class="price-block">
         <label class="compare-check" title="Add to compare (up to ${COMPARE_MAX_ITEMS})">

@@ -944,10 +944,41 @@ main {
   }
 }
 
+/* ---------- Tiny label shared by sparkline + heatmap captions ---------- */
+.chart-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: #94a3b8;
+  line-height: 1;
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+.chart-label .muted {
+  opacity: .7;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.chart-label .arrow {
+  display: inline-block;
+  background: linear-gradient(
+    90deg,
+    #4ade80 0%,
+    #facc15 50%,
+    #f87171 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 700;
+  padding: 0 2px;
+}
+
 /* ---------- Sparkline (price history on each card) ---------- */
 .sparkline-wrap {
-  margin-top: 4px;
-  opacity: 0.85;
+  margin-top: 6px;
+  opacity: 0.9;
   line-height: 0;  /* prevents extra vertical space below the SVG */
 }
 .sparkline {
@@ -956,7 +987,7 @@ main {
 
 /* ---------- Weekend heatmap (price comparison across weekends) ---------- */
 .heatmap-wrap {
-  margin-top: 4px;
+  margin-top: 6px;
   line-height: 0;
 }
 .heatmap {
