@@ -1619,11 +1619,50 @@ async function main() {
 // Register the service worker so the dashboard is installable as a
 // PWA and works offline after the first load. Only in secure contexts
 // (https or localhost) and only if the browser supports it.
+//
+// Auto-reload flow: when a new SW takes control (because we pushed a
+// new dashboard version), reload the page once so the user sees the
+// new HTML/CSS/JS immediately instead of having to manually hard-
+// refresh. The `refreshing` guard prevents a reload loop if the event
+// fires twice in quick succession.
 if ("serviceWorker" in navigator) {
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshing) return;
+    refreshing = true;
+    // Small delay so any pending SW activate() work finishes first.
+    setTimeout(() => window.location.reload(), 50);
+  });
+
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js").catch((err) => {
-      console.warn("Service worker registration failed:", err);
-    });
+    navigator.serviceWorker
+      .register("sw.js")
+      .then((registration) => {
+        // If a waiting worker exists (new SW already installed but
+        // stuck in "waiting" state), tell it to skip waiting so the
+        // controllerchange handler above fires and we reload.
+        if (registration.waiting) {
+          registration.waiting.postMessage({ type: "SKIP_WAITING" });
+        }
+        // If an update is found mid-session, nudge the new worker
+        // to activate immediately once it finishes installing.
+        registration.addEventListener("updatefound", () => {
+          const newWorker = registration.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener("statechange", () => {
+            if (
+              newWorker.state === "installed" &&
+              navigator.serviceWorker.controller
+            ) {
+              // A new version is ready. Ask it to skip waiting.
+              newWorker.postMessage({ type: "SKIP_WAITING" });
+            }
+          });
+        });
+      })
+      .catch((err) => {
+        console.warn("Service worker registration failed:", err);
+      });
   });
 }
 
