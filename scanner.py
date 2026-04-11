@@ -456,8 +456,29 @@ def next_weekend_windows(
     """Yield (window_id, window_label, out_date, in_date) for every
     (weekend, window) combination across the next `n` base Fridays.
 
-    Each base Friday fans out across the enabled weekend windows.
-    Callers get concrete outbound/return dates already computed.
+    Each base Friday fans out across the enabled weekend windows BUT
+    with one key rule: the extended windows (fri_mon, thu_sun,
+    fri_tue) only fire for weekends that actually align with an Irish
+    public holiday, i.e. "real long weekends" where the user doesn't
+    have to take a work day off to make the extra night(s) work:
+
+      fri_sun  ->  always yielded (classic 2-night weekend)
+      fri_mon  ->  yielded only if Monday is a bank holiday
+      thu_sun  ->  yielded only if Friday (the base Fri) is a holiday,
+                    so leaving Thursday night gives you Thu+Fri off
+      fri_tue  ->  yielded only if Tuesday is a bank holiday
+                    (St Patrick's-Tue bridges, Christmas crossovers)
+
+    This is a recent change from the earlier behaviour where extended
+    windows fired for every weekend in the horizon (generating a lot
+    of "Fri->Mon" deals that weren't actually long weekends, just
+    3-day trips burning a vacation day). The new gating means every
+    extended-window deal in the output represents a genuine
+    no-work-day-used long weekend opportunity.
+
+    Falls back to yielding every window unconditionally if
+    holidays.py can't be imported (defensive -- scanner never breaks
+    just because a data module went missing).
     """
     if windows is None:
         windows = WEEKEND_WINDOWS
@@ -466,12 +487,51 @@ def next_weekend_windows(
     if days_to_friday == 0:
         days_to_friday = 7
     first_friday = today + dt.timedelta(days=days_to_friday)
+
+    # Precompute a set of Irish bank holiday dates covering the scan
+    # horizon. Done once instead of per-window so the inner loop is
+    # a fast set-membership check.
+    holiday_dates: set[dt.date] = set()
+    try:
+        from holidays import irish_public_holidays
+        end_date = first_friday + dt.timedelta(weeks=n + 2)
+        for year in range(today.year, end_date.year + 1):
+            for h_date, _ in irish_public_holidays(year):
+                holiday_dates.add(h_date)
+    except Exception:
+        # Defensive: if holidays.py is unavailable, fall back to
+        # yielding every window unconditionally. Preserves the old
+        # behaviour rather than emitting zero deals.
+        holiday_dates = None  # type: ignore[assignment]
+
     for i in range(n):
         friday = first_friday + dt.timedelta(weeks=i)
         for window_id, window_label, out_offset, in_offset in windows:
             out_date = friday + dt.timedelta(days=out_offset)
             in_date = friday + dt.timedelta(days=in_offset)
-            yield window_id, window_label, out_date, in_date
+
+            # If holiday set unavailable, old behaviour -- yield all.
+            if holiday_dates is None:
+                yield window_id, window_label, out_date, in_date
+                continue
+
+            # fri_sun is unconditional: the classic 2-night weekend
+            # always runs regardless of bank holidays.
+            if window_id == "fri_sun":
+                yield window_id, window_label, out_date, in_date
+                continue
+
+            # Extended windows: only yield when the extra day(s)
+            # overlap a bank holiday.
+            monday = friday + dt.timedelta(days=3)
+            tuesday = friday + dt.timedelta(days=4)
+            if window_id == "fri_mon" and monday in holiday_dates:
+                yield window_id, window_label, out_date, in_date
+            elif window_id == "thu_sun" and friday in holiday_dates:
+                yield window_id, window_label, out_date, in_date
+            elif window_id == "fri_tue" and tuesday in holiday_dates:
+                yield window_id, window_label, out_date, in_date
+            # else: silently skip -- not a real long weekend.
 
 
 # ---------- Deep-link builders ----------
@@ -2570,7 +2630,7 @@ def _clear_scan_watchdog() -> None:
 # shows behaviour that doesn't match this ID's claimed features,
 # the runner is executing stale code. Look for this exact string
 # in the log to know which build is live.
-SCANNER_BUILD_ID = "build-2026-04-10.12 (Irish bank holidays, cap=EUR200, horizon=39w)"
+SCANNER_BUILD_ID = "build-2026-04-10.13 (bank-holiday-gated windows, cap=EUR200, horizon=39w)"
 
 
 def _run() -> int:

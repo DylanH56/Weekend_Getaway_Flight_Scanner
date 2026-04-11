@@ -27,7 +27,7 @@
         Shannon, Dublin &amp; Birmingham &rarr; Europe &middot;
         Ryanair + Aer Lingus &middot;
         <span class="cap">Fri 16:00+ / Sun 15:00+</span>
-        <span class="build-tag" id="build-tag">dashboard v14</span>
+        <span class="build-tag" id="build-tag">dashboard v15</span>
       </p>
     </div>
     <p class="meta" id="meta">Loading deals&hellip;</p>
@@ -96,23 +96,15 @@
             <span id="price-max-tick">&euro;200</span>
           </div>
         </div>
-        <div class="trip-length-presets" id="trip-length-presets">
-          <div class="presets-label">Trip length</div>
-          <div class="presets-row">
-            <button type="button" class="preset-btn" data-preset="weekend">
-              &#x2600; Weekend <span class="preset-subtitle">2 nights</span>
-            </button>
-            <button type="button" class="preset-btn" data-preset="long">
-              &#x1F319; Long weekend <span class="preset-subtitle">3 nights</span>
-            </button>
-            <button type="button" class="preset-btn" data-preset="any">
-              &#x2708; Any length <span class="preset-subtitle">all windows</span>
-            </button>
-          </div>
-        </div>
-        <div class="window-chips" id="window-chips">
-          <!-- populated from payload.weekend_windows at render time -->
-        </div>
+        <!-- Trip-length and window chips removed: the scanner now
+             only emits long-weekend windows (fri_mon / thu_sun /
+             fri_tue) for dates that actually align with an Irish
+             bank holiday, so every deal card's date range is either
+             a classic Fri-Sun weekend or a real bank holiday long
+             weekend. The "Bank holiday long weekends only" toggle
+             below (`#bank-holiday-only-toggle`) is the one filter
+             that matters. -->
+
         <div class="sort-row">
           <label>Sort by
             <select id="sort">

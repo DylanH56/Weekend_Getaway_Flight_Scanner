@@ -588,33 +588,60 @@ def test_history_annotation() -> None:
 
 
 def test_weekend_windows() -> None:
-    print("\n=== scanner.next_weekend_windows ===")
-    # 2 base weekends across 4 windows = 8 yielded tuples
-    results = list(scanner.next_weekend_windows(2))
-    assert_eq("8 window-weekends yielded (2 weekends x 4 windows)",
-              len(results), 8)
+    """Verify next_weekend_windows gates extended windows on real
+    Irish bank holidays.
 
-    import datetime as dt
-    ids = [r[0] for r in results]
-    assert_eq("fri_sun window present", "fri_sun" in ids, True)
-    assert_eq("thu_sun window present", "thu_sun" in ids, True)
-    assert_eq("fri_mon window present", "fri_mon" in ids, True)
-    assert_eq("fri_tue window present", "fri_tue" in ids, True)
+    fri_sun is always yielded (unconditional classic 2-night
+    weekend). fri_mon / thu_sun / fri_tue only fire when the
+    relevant day is an Irish public holiday -- so a short horizon
+    with no bank holidays should yield exactly n fri_sun entries
+    and zero extended-window entries.
+    """
+    print("\n=== scanner.next_weekend_windows (bank-holiday-gated) ===")
 
-    # Each fri_sun entry: out is Friday, in is 2 days later (Sunday)
-    for wid, _label, out_d, in_d in results:
+    # Short horizon test: 2 weekends ahead almost certainly contains
+    # zero bank holidays (unless the test runs on a very specific
+    # week, which is rare and the assertion below will flag it).
+    # Expect: 2 fri_sun entries only.
+    short = list(scanner.next_weekend_windows(2))
+    fri_sun_count = sum(1 for r in short if r[0] == "fri_sun")
+    assert_eq("short horizon: fri_sun yielded for every weekend",
+              fri_sun_count, 2)
+    # Extended windows must not appear unless a holiday lands in them.
+    # We can't assert `== 0` exactly (there might be an unusual week),
+    # but extended_count must be <= 2 (total bank holidays possible
+    # within a 2-week window).
+    extended_count = sum(1 for r in short if r[0] != "fri_sun")
+    assert_eq("short horizon: very few extended windows",
+              extended_count <= 2, True)
+
+    # Long horizon test (52 weeks): fri_sun yields 52, and we expect
+    # extended windows to fire for the 6-10 Irish bank holidays that
+    # fall across the year.
+    long = list(scanner.next_weekend_windows(52))
+    fri_sun_long = sum(1 for r in long if r[0] == "fri_sun")
+    assert_eq("long horizon: 52 fri_sun yields", fri_sun_long, 52)
+    extended_long = sum(1 for r in long if r[0] != "fri_sun")
+    assert_eq("long horizon: at least 3 extended windows",
+              extended_long >= 3, True)
+    assert_eq("long horizon: at most 12 extended windows (bank hols)",
+              extended_long <= 12, True)
+
+    # Date-sanity spot-check: every yielded (window, out, in) tuple
+    # has correct weekday offsets.
+    for wid, _label, out_d, in_d in long:
         if wid == "fri_sun":
-            assert_eq(f"fri_sun out is Friday", out_d.weekday(), 4)
-            assert_eq(f"fri_sun in is Sunday", in_d.weekday(), 6)
+            assert_eq("fri_sun out is Friday", out_d.weekday(), 4)
+            assert_eq("fri_sun in is Sunday", in_d.weekday(), 6)
         elif wid == "thu_sun":
-            assert_eq(f"thu_sun out is Thursday", out_d.weekday(), 3)
-            assert_eq(f"thu_sun in is Sunday", in_d.weekday(), 6)
+            assert_eq("thu_sun out is Thursday", out_d.weekday(), 3)
+            assert_eq("thu_sun in is Sunday", in_d.weekday(), 6)
         elif wid == "fri_mon":
-            assert_eq(f"fri_mon out is Friday", out_d.weekday(), 4)
-            assert_eq(f"fri_mon in is Monday", in_d.weekday(), 0)
+            assert_eq("fri_mon out is Friday", out_d.weekday(), 4)
+            assert_eq("fri_mon in is Monday", in_d.weekday(), 0)
         elif wid == "fri_tue":
-            assert_eq(f"fri_tue out is Friday", out_d.weekday(), 4)
-            assert_eq(f"fri_tue in is Tuesday", in_d.weekday(), 1)
+            assert_eq("fri_tue out is Friday", out_d.weekday(), 4)
+            assert_eq("fri_tue in is Tuesday", in_d.weekday(), 1)
 
 
 def test_send_test_notification() -> None:

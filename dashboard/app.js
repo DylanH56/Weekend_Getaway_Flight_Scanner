@@ -1026,11 +1026,6 @@ async function main() {
   // same marker again resets it.
   let selectedDestination = null;
 
-  // Weekend-window filter state. Default: the classic Fri->Sun is
-  // enabled and all others are off (matches the pre-multi-window
-  // behaviour). User toggles chips to enable longer windows.
-  const enabledWindows = new Set(["fri_sun"]);
-
   // Active region filter -- null means "show all regions". Set by
   // clicking a chip in #region-chips.
   let activeRegion = null;
@@ -1052,7 +1047,6 @@ async function main() {
       showBHX: bhxEl ? bhxEl.checked : true,
       maxPrice: isFinite(maxPrice) ? maxPrice : 150,
       sortMode: $("sort").value,
-      windows: enabledWindows,
       region: activeRegion,
       vibe: activeVibe,
       bankHolidayOnly: bankHolidayOnly,
@@ -1177,10 +1171,11 @@ async function main() {
       if (d.origin === "DUB" && !f.showDUB) return false;
       if (d.origin === "BHX" && !f.showBHX) return false;
       if (dealPrice(d) > f.maxPrice) return false;
-      // Weekend window: default to fri_sun for deals that predate the
-      // multi-window field (back-compat with old deals.json).
-      const win = d.weekend_window || "fri_sun";
-      if (f.windows.size > 0 && !f.windows.has(win)) return false;
+      // No window filter: the scanner now only emits extended
+      // windows (fri_mon / thu_sun / fri_tue) for real bank holiday
+      // weekends, so every deal in the payload is either a classic
+      // 2-night weekend OR a real long weekend. The optional
+      // "bank holidays only" toggle below covers the narrow case.
       // Region filter: null = all regions.
       if (f.region && regionOf(d.destination_country) !== f.region) return false;
       // Vibe filter: destination must be tagged with the selected
@@ -1373,12 +1368,6 @@ async function main() {
     const defaultMax = slider ? parseInt(slider.max, 10) : 150;
     if (f.maxPrice !== defaultMax) params.set("max", String(f.maxPrice));
 
-    // Weekend windows: serialise if not just the default fri_sun.
-    const wins = Array.from(f.windows);
-    if (wins.length !== 1 || wins[0] !== "fri_sun") {
-      params.set("win", wins.join(","));
-    }
-
     // Region: only if set.
     if (f.region) params.set("region", f.region);
 
@@ -1434,13 +1423,10 @@ async function main() {
       if (label) label.innerHTML = `&euro;${maxParam}`;
     }
 
-    const winParam = params.get("win");
-    if (winParam) {
-      enabledWindows.clear();
-      winParam.split(",").map((s) => s.trim()).filter(Boolean).forEach((w) => enabledWindows.add(w));
-      // Guard against empty set -- fall back to default.
-      if (enabledWindows.size === 0) enabledWindows.add("fri_sun");
-    }
+    // Legacy ?win=... URL param is ignored -- window filtering
+    // was removed when the scanner moved to only emitting extended
+    // windows on real bank holidays. Old bookmarks still work
+    // (the unknown param just gets dropped on the next render).
 
     const regionParam = params.get("region");
     if (regionParam && REGION_ORDER.includes(regionParam)) {
@@ -1484,113 +1470,6 @@ async function main() {
     }
   }
   // --- end URL state persistence -----------------------------------
-
-  // Render the chip row from payload.weekend_windows. Each chip shows
-  // Trip-length presets: one-click shortcuts that set enabledWindows
-  // in bulk. Each preset maps to a fixed list of window IDs, with
-  // "any" pulling whatever's available from the current payload so
-  // future scanner additions flow through automatically.
-  //
-  //   weekend  -> ["fri_sun"]                   (2 nights)
-  //   long     -> ["fri_sun", "fri_mon", "thu_sun"]  (all 3-night options + classic)
-  //   any      -> every window the scanner knows about
-  //
-  // The "long" preset intentionally keeps fri_sun enabled too so the
-  // user sees BOTH 2-night and 3-night options -- they can always
-  // narrow further by clicking individual chips.
-  const TRIP_LENGTH_PRESETS = {
-    weekend: ["fri_sun"],
-    long: ["fri_sun", "fri_mon", "thu_sun"],
-    any: null,  // resolved at click time from payload.weekend_windows
-  };
-
-  // Compute which preset (if any) matches the current enabledWindows
-  // exactly. Returns the preset key or null if the current selection
-  // doesn't line up with any preset (user customised manually).
-  function currentTripLengthPreset() {
-    const current = Array.from(enabledWindows).sort();
-    for (const [key, ids] of Object.entries(TRIP_LENGTH_PRESETS)) {
-      let targetIds;
-      if (key === "any") {
-        targetIds = (payload.weekend_windows || []).map((w) => w.id).sort();
-      } else {
-        // Only count window IDs that actually exist in the payload --
-        // avoids a mismatch if the scanner doesn't include one of the
-        // preset's IDs (e.g. older scans predating fri_mon).
-        const payloadIds = new Set((payload.weekend_windows || []).map((w) => w.id));
-        targetIds = ids.filter((id) => payloadIds.has(id)).sort();
-      }
-      if (
-        targetIds.length === current.length &&
-        targetIds.every((id, i) => id === current[i])
-      ) {
-        return key;
-      }
-    }
-    return null;
-  }
-
-  function renderTripLengthPresets() {
-    const container = $("trip-length-presets");
-    if (!container) return;
-    const active = currentTripLengthPreset();
-    container.querySelectorAll(".preset-btn").forEach((btn) => {
-      const preset = btn.dataset.preset;
-      btn.classList.toggle("active", preset === active);
-    });
-  }
-
-  function applyTripLengthPreset(presetKey) {
-    const payloadIds = (payload.weekend_windows || []).map((w) => w.id);
-    let newIds;
-    if (presetKey === "any") {
-      newIds = payloadIds;
-    } else {
-      newIds = (TRIP_LENGTH_PRESETS[presetKey] || [])
-        .filter((id) => payloadIds.includes(id));
-    }
-    if (newIds.length === 0) {
-      // Defensive: never leave the user with an empty window set.
-      newIds = payloadIds.length > 0 ? [payloadIds[0]] : ["fri_sun"];
-    }
-    enabledWindows.clear();
-    newIds.forEach((id) => enabledWindows.add(id));
-    render();
-  }
-
-  // Render the chip row from payload.weekend_windows. Each chip shows
-  // the window label + a live count of deals that match (respecting
-  // the other filters, but ignoring the chip itself so toggling one on
-  // always shows its true capacity).
-  function renderWindowChips() {
-    const container = $("window-chips");
-    if (!container) return;
-    const windows = payload.weekend_windows || [{ id: "fri_sun", label: "Fri \u2192 Sun" }];
-    container.innerHTML = "";
-    windows.forEach((w) => {
-      // Count deals that would match if this window were the only
-      // window filter active (other filters still apply).
-      const f = currentFilters();
-      const otherFilters = { ...f, windows: new Set([w.id]) };
-      const count = applyFilters(payload.deals, otherFilters).length;
-
-      const chip = document.createElement("div");
-      chip.className = "window-chip" + (enabledWindows.has(w.id) ? " active" : "");
-      chip.innerHTML = `${w.label} <span class="count">${count}</span>`;
-      chip.addEventListener("click", () => {
-        if (enabledWindows.has(w.id)) {
-          // Don't let the user disable the last remaining window --
-          // that'd leave the dashboard empty with no obvious cause.
-          if (enabledWindows.size === 1) return;
-          enabledWindows.delete(w.id);
-        } else {
-          enabledWindows.add(w.id);
-        }
-        render();
-      });
-      container.appendChild(chip);
-    });
-  }
 
   // Group deals by destination IATA and pick the cheapest per destination.
   // Used to render one price-badge marker per city on the map instead of
@@ -1780,8 +1659,9 @@ async function main() {
       if (f.maxPrice < serverCap) hints.push(`raising the price slider (currently &euro;${f.maxPrice})`);
       if (origins < 3) hints.push("enabling more origin airports");
       if (f.region) hints.push(`clearing the <b>${f.region}</b> region filter`);
+      if (f.vibe) hints.push(`clearing the <b>${f.vibe}</b> vibe filter`);
       if (f.search) hints.push(`clearing the search for <b>"${f.search.replace(/</g, "&lt;")}"</b>`);
-      if (f.windows.size === 1 && !f.windows.has("fri_sun")) hints.push("enabling more weekend windows");
+      if (f.bankHolidayOnly) hints.push("turning off <b>Bank holiday long weekends only</b>");
       if (selectedDestination) hints.push("unpinning the selected destination");
 
       const showReset = hints.length > 0;
@@ -1847,8 +1727,6 @@ async function main() {
     }
     const searchBox = $("search-box");
     if (searchBox) searchBox.value = "";
-    enabledWindows.clear();
-    enabledWindows.add("fri_sun");
     activeRegion = null;
     activeVibe = null;
     bankHolidayOnly = false;
@@ -1867,8 +1745,6 @@ async function main() {
     // user is actually looking at.
     destWeekendMatrix = buildDestWeekendMatrix(filtered);
     updateMeta(filtered.length, payload.deals.length);
-    renderTripLengthPresets();
-    renderWindowChips();
     renderRegionChips();
     renderVibeChips();
     renderMapMarkers(filtered);
@@ -1925,17 +1801,6 @@ async function main() {
     bhxCheckbox.addEventListener("change", render);
   }
   $("sort").addEventListener("change", render);
-
-  // Trip length presets -- one click to switch between Weekend /
-  // Long weekend / Any length. Each button data-preset maps to
-  // TRIP_LENGTH_PRESETS[key] in applyTripLengthPreset().
-  document.querySelectorAll(".preset-btn[data-preset]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const preset = btn.dataset.preset;
-      if (!preset) return;
-      applyTripLengthPreset(preset);
-    });
-  });
 
   // Compare tray + modal wiring.
   const openCompareBtn = $("open-compare");
