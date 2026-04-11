@@ -411,10 +411,14 @@ EUROPE_ROUTES: dict[str, list[tuple[str, str, str, float, float]]] = {
 # tags each deal with `weekend_window`, and the dashboard surfaces a
 # filter chip so the user can pick their preferred window(s).
 WEEKEND_WINDOWS: list[tuple[str, str, int, int]] = [
-    ("fri_sun", "Fri \u2192 Sun",   0, 2),  # classic 2-night weekend
-    ("thu_sun", "Thu \u2192 Sun",  -1, 2),  # 3-night, leave Thu evening
-    ("fri_mon", "Fri \u2192 Mon",   0, 3),  # 3-night, return Mon
-    ("fri_tue", "Fri \u2192 Tue",   0, 4),  # 4-night, bank-holiday long weekend
+    # (id, user-friendly label, out_offset_from_fri, in_offset_from_fri)
+    # Labels use "Weekend" / "Long weekend" / "Extended" so the
+    # dashboard chips read naturally; the explicit day range in
+    # parentheses lets users see exactly what they're picking.
+    ("fri_sun", "Weekend (Fri \u2192 Sun)",       0, 2),  # classic 2-night
+    ("fri_mon", "Long weekend (Fri \u2192 Mon)",  0, 3),  # 3-night, Mon return
+    ("thu_sun", "Long weekend (Thu \u2192 Sun)", -1, 2),  # 3-night, Thu start
+    ("fri_tue", "Extended (Fri \u2192 Tue)",       0, 4),  # 4-night, bank-hol
 ]
 
 

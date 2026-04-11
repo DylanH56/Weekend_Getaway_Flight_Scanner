@@ -26,7 +26,7 @@
 // Bump this whenever the dashboard shell (html/css/js) changes so
 // users pick up the new files on next reload. Old caches get pruned
 // in the activate hook.
-const CACHE_VERSION = "v11-chart-labels";
+const CACHE_VERSION = "v12-trip-length-presets";
 const SHELL_CACHE = `shell-${CACHE_VERSION}`;
 const DATA_CACHE = `data-${CACHE_VERSION}`;
 const PHOTO_CACHE = `photos-${CACHE_VERSION}`;

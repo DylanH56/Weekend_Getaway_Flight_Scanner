@@ -1462,6 +1462,79 @@ async function main() {
   // --- end URL state persistence -----------------------------------
 
   // Render the chip row from payload.weekend_windows. Each chip shows
+  // Trip-length presets: one-click shortcuts that set enabledWindows
+  // in bulk. Each preset maps to a fixed list of window IDs, with
+  // "any" pulling whatever's available from the current payload so
+  // future scanner additions flow through automatically.
+  //
+  //   weekend  -> ["fri_sun"]                   (2 nights)
+  //   long     -> ["fri_sun", "fri_mon", "thu_sun"]  (all 3-night options + classic)
+  //   any      -> every window the scanner knows about
+  //
+  // The "long" preset intentionally keeps fri_sun enabled too so the
+  // user sees BOTH 2-night and 3-night options -- they can always
+  // narrow further by clicking individual chips.
+  const TRIP_LENGTH_PRESETS = {
+    weekend: ["fri_sun"],
+    long: ["fri_sun", "fri_mon", "thu_sun"],
+    any: null,  // resolved at click time from payload.weekend_windows
+  };
+
+  // Compute which preset (if any) matches the current enabledWindows
+  // exactly. Returns the preset key or null if the current selection
+  // doesn't line up with any preset (user customised manually).
+  function currentTripLengthPreset() {
+    const current = Array.from(enabledWindows).sort();
+    for (const [key, ids] of Object.entries(TRIP_LENGTH_PRESETS)) {
+      let targetIds;
+      if (key === "any") {
+        targetIds = (payload.weekend_windows || []).map((w) => w.id).sort();
+      } else {
+        // Only count window IDs that actually exist in the payload --
+        // avoids a mismatch if the scanner doesn't include one of the
+        // preset's IDs (e.g. older scans predating fri_mon).
+        const payloadIds = new Set((payload.weekend_windows || []).map((w) => w.id));
+        targetIds = ids.filter((id) => payloadIds.has(id)).sort();
+      }
+      if (
+        targetIds.length === current.length &&
+        targetIds.every((id, i) => id === current[i])
+      ) {
+        return key;
+      }
+    }
+    return null;
+  }
+
+  function renderTripLengthPresets() {
+    const container = $("trip-length-presets");
+    if (!container) return;
+    const active = currentTripLengthPreset();
+    container.querySelectorAll(".preset-btn").forEach((btn) => {
+      const preset = btn.dataset.preset;
+      btn.classList.toggle("active", preset === active);
+    });
+  }
+
+  function applyTripLengthPreset(presetKey) {
+    const payloadIds = (payload.weekend_windows || []).map((w) => w.id);
+    let newIds;
+    if (presetKey === "any") {
+      newIds = payloadIds;
+    } else {
+      newIds = (TRIP_LENGTH_PRESETS[presetKey] || [])
+        .filter((id) => payloadIds.includes(id));
+    }
+    if (newIds.length === 0) {
+      // Defensive: never leave the user with an empty window set.
+      newIds = payloadIds.length > 0 ? [payloadIds[0]] : ["fri_sun"];
+    }
+    enabledWindows.clear();
+    newIds.forEach((id) => enabledWindows.add(id));
+    render();
+  }
+
+  // Render the chip row from payload.weekend_windows. Each chip shows
   // the window label + a live count of deals that match (respecting
   // the other filters, but ignoring the chip itself so toggling one on
   // always shows its true capacity).
@@ -1757,6 +1830,7 @@ async function main() {
     // user is actually looking at.
     destWeekendMatrix = buildDestWeekendMatrix(filtered);
     updateMeta(filtered.length, payload.deals.length);
+    renderTripLengthPresets();
     renderWindowChips();
     renderRegionChips();
     renderVibeChips();
@@ -1794,6 +1868,17 @@ async function main() {
     bhxCheckbox.addEventListener("change", render);
   }
   $("sort").addEventListener("change", render);
+
+  // Trip length presets -- one click to switch between Weekend /
+  // Long weekend / Any length. Each button data-preset maps to
+  // TRIP_LENGTH_PRESETS[key] in applyTripLengthPreset().
+  document.querySelectorAll(".preset-btn[data-preset]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const preset = btn.dataset.preset;
+      if (!preset) return;
+      applyTripLengthPreset(preset);
+    });
+  });
 
   // Compare tray + modal wiring.
   const openCompareBtn = $("open-compare");
