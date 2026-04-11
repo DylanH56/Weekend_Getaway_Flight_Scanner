@@ -741,6 +741,18 @@ main {
 .badge.carrier-ei { background: rgba(34, 197, 94, .12); color: #86efac; border: 1px solid rgba(34, 197, 94, .4); }
 .badge.carrier-u2 { background: rgba(249, 115, 22, .12); color: #fdba74; border: 1px solid rgba(249, 115, 22, .4); }
 .badge.carrier-w6 { background: rgba(236, 72, 153, .12); color: #f9a8d4; border: 1px solid rgba(236, 72, 153, .4); }
+
+/* Irish bank holiday badge -- green accent, stands out from the
+   carrier/origin/window badges so the user spots real long-weekend
+   opportunities at a glance. Tooltip carries the "no work day used"
+   bonus explanation. */
+.badge.holiday {
+  background: rgba(22, 163, 74, .18);
+  color: #86efac;
+  border: 1px solid rgba(22, 163, 74, .55);
+  font-weight: 700;
+  cursor: help;
+}
 .badge.window {
   margin-left: 4px;
   background: rgba(148, 163, 184, .1);

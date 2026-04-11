@@ -224,6 +224,12 @@ let costOfLiving = {};
 // localStorage so it persists across page loads.
 let showTripCost = false;
 
+// User's preference for filtering to only bank-holiday long weekends
+// (deals whose date range contains an Irish public holiday).
+// Stored in localStorage AND mirrored to the URL as &hol=1 so
+// shareable links preserve the filter.
+let bankHolidayOnly = false;
+
 // Active vibe filter -- null = all vibes. Set by clicking a
 // vibe chip. Persisted to localStorage + URL like the other
 // filter state.
@@ -822,6 +828,7 @@ function renderDealCard(deal, idx) {
       <span class="badge ${(deal.origin || "").toLowerCase()}">${ORIGIN_LABEL[deal.origin] || deal.origin || "?"}</span>
       ${deal.carrier_code ? `<span class="badge carrier carrier-${deal.carrier_code.toLowerCase()}">${deal.carrier_code}</span>` : ""}
       ${deal.weekend_window_label ? `<span class="badge window">${deal.weekend_window_label}</span>` : ""}
+      ${deal.is_long_weekend && deal.holiday_name ? `<span class="badge holiday" title="${(deal.holiday_bonus || '').replace(/"/g, '&quot;')}">&#x1F1EE;&#x1F1EA; ${deal.holiday_name}</span>` : ""}
       ${deal.weather_emoji ? `<span class="weather-pill" title="${deal.weather_text || ""}">${deal.weather_emoji} ${deal.weather_high_c != null ? Math.round(deal.weather_high_c) + "&deg;" : ""}${deal.weather_low_c != null ? " / " + Math.round(deal.weather_low_c) + "&deg;" : ""}</span>` : ""}
       <span class="country">${fmtDate(deal.outbound_departure)} &ndash; ${fmtDate(deal.inbound_departure)}</span>
     </div>
@@ -1048,6 +1055,7 @@ async function main() {
       windows: enabledWindows,
       region: activeRegion,
       vibe: activeVibe,
+      bankHolidayOnly: bankHolidayOnly,
       search: currentSearchQuery(),
     };
   }
@@ -1183,6 +1191,12 @@ async function main() {
         const tags = destTagsByIata[d.destination_iata];
         if (!Array.isArray(tags) || !tags.includes(f.vibe)) return false;
       }
+      // Bank-holiday filter: only show deals whose date range
+      // contains an Irish public holiday. is_long_weekend is set
+      // by the scanner via holidays.long_weekend_info(). Deals from
+      // older scans without the field are treated as "not tagged"
+      // and hidden when the filter is active.
+      if (f.bankHolidayOnly && !d.is_long_weekend) return false;
       // Text search: match against city, country, or IATA (all lower-cased).
       if (f.search) {
         const hay = (
@@ -1371,6 +1385,9 @@ async function main() {
     // Vibe: only if set.
     if (f.vibe) params.set("vibe", f.vibe);
 
+    // Bank-holiday-only toggle: only if on.
+    if (f.bankHolidayOnly) params.set("hol", "1");
+
     // Search query: only if non-empty.
     if (f.search) params.set("q", f.search);
 
@@ -1433,6 +1450,13 @@ async function main() {
     const vibeParam = params.get("vibe");
     if (vibeParam) {
       activeVibe = vibeParam;
+    }
+
+    const holParam = params.get("hol");
+    if (holParam === "1" || holParam === "true") {
+      bankHolidayOnly = true;
+      const holEl = $("bank-holiday-only-toggle");
+      if (holEl) holEl.checked = true;
     }
 
     const qParam = params.get("q");
@@ -1827,6 +1851,9 @@ async function main() {
     enabledWindows.add("fri_sun");
     activeRegion = null;
     activeVibe = null;
+    bankHolidayOnly = false;
+    const holEl = $("bank-holiday-only-toggle");
+    if (holEl) holEl.checked = false;
     selectedDestination = null;
   }
 
@@ -2143,6 +2170,30 @@ async function main() {
         localStorage.setItem("show_trip_cost", String(showTripCost));
       } catch (e) {
         // Non-fatal -- the toggle still works in-session.
+      }
+      render();
+    });
+  }
+
+  // Bank-holiday-only toggle: restrict the visible deals to those
+  // whose date range contains an Irish public holiday. Persisted
+  // to both localStorage (so it survives reload) and the URL
+  // (?hol=1) so shareable links preserve the filter.
+  const holEl = $("bank-holiday-only-toggle");
+  if (holEl) {
+    try {
+      const saved = localStorage.getItem("bank_holiday_only");
+      bankHolidayOnly = saved === "true";
+      holEl.checked = bankHolidayOnly;
+    } catch (e) {
+      // localStorage disabled -- start off.
+    }
+    holEl.addEventListener("change", () => {
+      bankHolidayOnly = holEl.checked;
+      try {
+        localStorage.setItem("bank_holiday_only", String(bankHolidayOnly));
+      } catch (e) {
+        // Non-fatal.
       }
       render();
     });

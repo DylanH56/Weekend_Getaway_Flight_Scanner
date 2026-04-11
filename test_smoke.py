@@ -722,6 +722,88 @@ def test_deeplink_shapes() -> None:
     assert_eq("sky url is lowercase", "snn/fao" in s, True)
 
 
+def test_irish_holidays() -> None:
+    """Verify holidays.py emits the correct dates per the 2023 reform
+    and matches the user's brief. Spot-checks 2026 + 2027."""
+    print("\n=== holidays.py: Irish public holidays 2026 + 2027 ===")
+    import holidays as h
+    import datetime as dt
+
+    # Expected 2026 (from the user's Irish-government brief)
+    expected_2026 = {
+        dt.date(2026, 1, 1): "New Year's Day",
+        dt.date(2026, 2, 2): "First Monday in February",
+        dt.date(2026, 3, 17): "Saint Patrick's Day",
+        dt.date(2026, 4, 6): "Easter Monday",
+        dt.date(2026, 5, 4): "May Bank Holiday",
+        dt.date(2026, 6, 1): "June Bank Holiday",
+        dt.date(2026, 8, 3): "August Bank Holiday",
+        dt.date(2026, 10, 26): "October Bank Holiday",
+        dt.date(2026, 12, 25): "Christmas Day",
+        dt.date(2026, 12, 26): "Saint Stephen's Day",
+    }
+    got_2026 = dict(h.irish_public_holidays(2026))
+    assert_eq("2026 has exactly 10 public holidays", len(got_2026), 10)
+    for d, name in expected_2026.items():
+        assert_eq(f"2026 {d}: {name}", got_2026.get(d), name)
+
+    # Expected 2027 (Easter Mon = 29 March because Easter Sun = 28 Mar)
+    expected_2027 = {
+        dt.date(2027, 1, 1): "New Year's Day",
+        dt.date(2027, 2, 1): "First Monday in February",
+        dt.date(2027, 3, 17): "Saint Patrick's Day",
+        dt.date(2027, 3, 29): "Easter Monday",
+        dt.date(2027, 5, 3): "May Bank Holiday",
+        dt.date(2027, 6, 7): "June Bank Holiday",
+        dt.date(2027, 8, 2): "August Bank Holiday",
+        dt.date(2027, 10, 25): "October Bank Holiday",
+        dt.date(2027, 12, 25): "Christmas Day",
+        dt.date(2027, 12, 26): "Saint Stephen's Day",
+    }
+    got_2027 = dict(h.irish_public_holidays(2027))
+    assert_eq("2027 has exactly 10 public holidays", len(got_2027), 10)
+    for d, name in expected_2027.items():
+        assert_eq(f"2027 {d}: {name}", got_2027.get(d), name)
+
+
+def test_long_weekend_info() -> None:
+    """Verify the trip-range holiday classifier tags real long weekends
+    and returns None for random weekends."""
+    print("\n=== holidays.long_weekend_info ===")
+    import holidays as h
+    import datetime as dt
+
+    # Easter Mon 2026: Fri 3 Apr -> Mon 6 Apr IS a real long weekend
+    info = h.long_weekend_info(dt.date(2026, 4, 3), dt.date(2026, 4, 6))
+    assert_eq("Easter Mon weekend returns dict", info is not None, True)
+    if info:
+        assert_eq("Easter Mon is_long_weekend", info["is_long_weekend"], True)
+        assert_eq("Easter Mon holiday_name", info["holiday_name"], "Easter Monday")
+        assert_eq("Easter Mon holiday_date", info["holiday_date"], "2026-04-06")
+
+    # Random weekend (no bank holiday): Fri 17 Apr -> Sun 19 Apr
+    info_none = h.long_weekend_info(dt.date(2026, 4, 17), dt.date(2026, 4, 19))
+    assert_eq("Random weekend returns None", info_none, None)
+
+    # May bank hol 2026: Fri 1 May -> Mon 4 May
+    info_may = h.long_weekend_info(dt.date(2026, 5, 1), dt.date(2026, 5, 4))
+    assert_eq("May bank hol is_long_weekend",
+              info_may is not None and info_may["is_long_weekend"], True)
+
+    # Last Mon Oct 2026 (Halloween bank hol): Fri 23 -> Mon 26 Oct
+    info_oct = h.long_weekend_info(dt.date(2026, 10, 23), dt.date(2026, 10, 26))
+    assert_eq("Halloween bank hol name",
+              info_oct["holiday_name"] if info_oct else None,
+              "October Bank Holiday")
+
+    # Thu-Sun starting on 1 Jan 2026 (New Year's Day = Thu):
+    # the trip contains the holiday itself.
+    info_nye = h.long_weekend_info(dt.date(2026, 1, 1), dt.date(2026, 1, 4))
+    assert_eq("New Year's Day Thu-Sun trip tagged",
+              info_nye is not None and info_nye["holiday_name"] == "New Year's Day",
+              True)
+
+
 # ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
@@ -738,6 +820,8 @@ def main() -> int:
     test_send_test_notification()
     test_fetch_fares_uses_http_get_seam()
     test_deeplink_shapes()
+    test_irish_holidays()
+    test_long_weekend_info()
 
     passed = sum(1 for _, ok, _ in results if ok)
     total = len(results)

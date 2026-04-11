@@ -565,12 +565,21 @@ def _apply_common_filters(
     flight_price: float,
     out_dep: str,
     in_dep: str,
-) -> tuple[float | None, float | None, str, str] | None:
+) -> dict | None:
     """Shared post-normalisation checks used by every source.
 
-    Returns (lat, lon, out_hhmm, in_hhmm) if the fare passes all the
-    common filters (evening window, IATA present, etc); returns None
-    and bumps the appropriate reject counter otherwise.
+    Returns a dict of common fields (lat/lon/out_hhmm/in_hhmm PLUS
+    Irish-bank-holiday tags) if the fare passes every common filter,
+    or None (and bumps a reject counter) if not.
+
+    The dict always contains:
+        destination_lat, destination_lon        from _IATA_COORDS
+        _out_hhmm, _in_hhmm                     underscore-prefix because
+                                                caller strips them later
+        is_long_weekend                         bool (always set)
+        holiday_name                            str | None
+        holiday_date                            iso str | None
+        holiday_bonus                           human label or None
     """
     if not dest_iata:
         _reject_counts["missing_iata"] += 1
@@ -596,7 +605,28 @@ def _apply_common_filters(
         _reject_counts["unknown_destination"] += 1
         lat = lon = None
 
-    return (lat, lon, out_hhmm, in_hhmm)
+    # Irish bank holiday detection -- tags the deal if its date range
+    # contains a public holiday, so the dashboard can highlight
+    # "real" long weekends where the user doesn't need to take a
+    # work day off. Falls through silently if holidays.py import
+    # fails (defensive -- scanner should keep working on bad data).
+    holiday_info: dict | None = None
+    try:
+        from holidays import long_weekend_info
+        out_date = dt.date.fromisoformat(out_dep[:10])
+        in_date = dt.date.fromisoformat(in_dep[:10])
+        holiday_info = long_weekend_info(out_date, in_date)
+    except Exception:
+        holiday_info = None
+
+    return {
+        "destination_lat": lat,
+        "destination_lon": lon,
+        "is_long_weekend": bool(holiday_info and holiday_info.get("is_long_weekend")),
+        "holiday_name": holiday_info.get("holiday_name") if holiday_info else None,
+        "holiday_date": holiday_info.get("holiday_date") if holiday_info else None,
+        "holiday_bonus": holiday_info.get("holiday_bonus") if holiday_info else None,
+    }
 
 # Supplementary IATA -> (lat, lon) map for destinations Ryanair returns
 # that aren't in EUROPE_ROUTES. EUROPE_ROUTES is deliberately kept
@@ -793,7 +823,6 @@ def _ryanair_normalise_fare(fare: dict, origin: str) -> dict | None:
     common = _apply_common_filters(origin, dest_iata, flight_price, out_dep, in_dep)
     if common is None:
         return None
-    lat, lon, _out_hhmm, _in_hhmm = common
 
     out_date = out_dep[:10]
     in_date = in_dep[:10]
@@ -805,8 +834,8 @@ def _ryanair_normalise_fare(fare: dict, origin: str) -> dict | None:
         "destination_iata": dest_iata,
         "destination_city": _city_name(arr),
         "destination_country": arr.get("countryName", ""),
-        "destination_lat": lat,
-        "destination_lon": lon,
+        "destination_lat": common["destination_lat"],
+        "destination_lon": common["destination_lon"],
         "flight_price_eur": round(flight_price, 2),
         "bus_surcharge_eur": round(bus, 2),
         "effective_price_eur": round(effective, 2),
@@ -817,6 +846,10 @@ def _ryanair_normalise_fare(fare: dict, origin: str) -> dict | None:
         "inbound_departure": in_dep,
         "inbound_arrival": in_arr,
         "inbound_flight_number": inbound.get("flightNumber", ""),
+        "is_long_weekend": common["is_long_weekend"],
+        "holiday_name": common["holiday_name"],
+        "holiday_date": common["holiday_date"],
+        "holiday_bonus": common["holiday_bonus"],
         "google_flights_url": google_flights_url(origin, dest_iata, out_date, in_date),
         "skyscanner_url": skyscanner_url(origin, dest_iata, out_date, in_date),
     }
@@ -1302,7 +1335,6 @@ def _aer_lingus_normalise_fare(fare: dict, origin: str) -> dict | None:
         )
         if common is None:
             return None
-        lat, lon, _out_hhmm, _in_hhmm = common
 
         out_info = out_trip.get("info") or {}
         in_info = in_trip.get("info") or {}
@@ -1327,8 +1359,8 @@ def _aer_lingus_normalise_fare(fare: dict, origin: str) -> dict | None:
             "destination_iata": dest_iata,
             "destination_city": dest_iata,  # AL doesn't give city name; IATA as fallback
             "destination_country": "",
-            "destination_lat": lat,
-            "destination_lon": lon,
+            "destination_lat": common["destination_lat"],
+            "destination_lon": common["destination_lon"],
             "flight_price_eur": round(flight_price, 2),
             "bus_surcharge_eur": round(bus, 2),
             "effective_price_eur": round(effective, 2),
@@ -1339,6 +1371,10 @@ def _aer_lingus_normalise_fare(fare: dict, origin: str) -> dict | None:
             "inbound_departure": in_dep,
             "inbound_arrival": in_arr,
             "inbound_flight_number": in_flight_num,
+            "is_long_weekend": common["is_long_weekend"],
+            "holiday_name": common["holiday_name"],
+            "holiday_date": common["holiday_date"],
+            "holiday_bonus": common["holiday_bonus"],
             "google_flights_url": google_flights_url(
                 origin_from_fare, dest_iata, out_date, in_date
             ),
@@ -2338,6 +2374,13 @@ def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
     `time_window_note` so the dashboard can warn the user; the actual
     filtering has to happen on the destination site.
     """
+    # Import inside function so a missing holidays.py never takes the
+    # fallback-mode path itself down.
+    try:
+        from holidays import long_weekend_info as _lwi
+    except Exception:
+        _lwi = lambda a, b: None  # noqa: E731
+
     entries: list[dict] = []
     for origin, routes in EUROPE_ROUTES.items():
         # Bus surcharge is DUB-specific (Limerick<->Dublin return bus).
@@ -2345,6 +2388,7 @@ def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
         bus = BUS_RETURN_COST_EUR if origin == "DUB" else 0.0
         for iata, city, country, lat, lon in routes:
             for friday, sunday in weekends:
+                hol = _lwi(friday, sunday)
                 entries.append({
                     "origin": origin,
                     "destination_iata": iata,
@@ -2362,6 +2406,10 @@ def build_prospects(weekends: list[tuple[dt.date, dt.date]]) -> list[dict]:
                     "inbound_departure": f"{sunday.isoformat()}T19:00:00",
                     "inbound_arrival": "",
                     "inbound_flight_number": "",
+                    "is_long_weekend": bool(hol and hol.get("is_long_weekend")),
+                    "holiday_name": hol.get("holiday_name") if hol else None,
+                    "holiday_date": hol.get("holiday_date") if hol else None,
+                    "holiday_bonus": hol.get("holiday_bonus") if hol else None,
                     "time_window_note": PROSPECTS_TIME_NOTE,
                     "google_flights_url": google_flights_url(
                         origin, iata, friday.isoformat(), sunday.isoformat()
@@ -2522,7 +2570,7 @@ def _clear_scan_watchdog() -> None:
 # shows behaviour that doesn't match this ID's claimed features,
 # the runner is executing stale code. Look for this exact string
 # in the log to know which build is live.
-SCANNER_BUILD_ID = "build-2026-04-10.11 (cap=EUR200, horizon=39w, Wizz+easyJet opt-in)"
+SCANNER_BUILD_ID = "build-2026-04-10.12 (Irish bank holidays, cap=EUR200, horizon=39w)"
 
 
 def _run() -> int:
