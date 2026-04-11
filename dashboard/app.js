@@ -198,6 +198,14 @@ let activeCurrency = "EUR";
 // read it without being threaded through every call site.
 let historyByKey = {};
 
+// Per-destination weekend price matrix, rebuilt on every render().
+// Shape: { "BCN": [{week: "2026-05-08", price: 45}, ...], ... }
+// Used by renderDealCard() to render the weekend-comparison
+// heatmap on each card. Rebuilt rather than cached because it
+// depends on the filtered deal list -- a different filter might
+// exclude some weekends and change the min/max colouring.
+let destWeekendMatrix = {};
+
 // Comparison tray: Set of dealKey strings the user has checked for
 // side-by-side comparison. Capped at COMPARE_MAX_ITEMS deals to
 // keep the modal usable. Persists across filter changes so you can
@@ -387,6 +395,102 @@ async function loadHistory() {
   }
 }
 
+// Build a { iata: [{week, price}, ...] } map from the full deal
+// list. Each entry is the CHEAPEST price seen for that destination
+// on that weekend (multiple carriers / windows collapse to the
+// lowest). Sorted by week ascending so the heatmap renders in
+// chronological order.
+//
+// Called once per render() from the module-level cache so each
+// card doesn't have to recompute the whole matrix.
+function buildDestWeekendMatrix(deals) {
+  const byIata = {};
+  for (const d of deals) {
+    const iata = d.destination_iata;
+    const week = (d.outbound_departure || "").slice(0, 10);
+    if (!iata || !week) continue;
+    const price = dealPrice(d);
+    if (!byIata[iata]) byIata[iata] = {};
+    if (byIata[iata][week] === undefined || price < byIata[iata][week]) {
+      byIata[iata][week] = price;
+    }
+  }
+  // Collapse to sorted arrays so downstream code doesn't have to
+  // sort on every render.
+  const out = {};
+  for (const iata of Object.keys(byIata)) {
+    const entries = Object.entries(byIata[iata])
+      .map(([week, price]) => ({ week, price }))
+      .sort((a, b) => a.week.localeCompare(b.week));
+    out[iata] = entries;
+  }
+  return out;
+}
+
+// Render a compact inline SVG price heatmap for a destination.
+// Takes the array of { week, price } entries for a single IATA and
+// produces a 96x14px horizontal strip of up to 8 coloured cells
+// (one per upcoming weekend), green = cheapest, red = most expensive.
+// Clicking a cell triggers a custom event `heatmap-click` on the
+// card with detail.week so the sidebar can navigate to that weekend.
+//
+// Returns "" if the destination has fewer than 2 weekends of data
+// (nothing worth comparing).
+function heatmapSvg(entries, activeWeek, width = 96, height = 14) {
+  if (!Array.isArray(entries) || entries.length < 2) return "";
+  // Cap at 8 weekends to keep the strip compact. Take the closest
+  // 8 in chronological order starting from the current active week
+  // if possible, otherwise just the first 8.
+  const n = Math.min(entries.length, 8);
+  const slice = entries.slice(0, n);
+
+  const prices = slice.map((e) => e.price);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const range = max - min || 1;
+
+  const cellW = width / n;
+  const cells = slice.map((e, i) => {
+    const t = (e.price - min) / range;  // 0 = cheapest, 1 = priciest
+    // Green (0) -> Yellow (0.5) -> Red (1)
+    let color;
+    if (t < 0.5) {
+      // green to yellow
+      const r = Math.round(74 + (250 - 74) * (t * 2));
+      const g = Math.round(222 + (204 - 222) * (t * 2));
+      const b = Math.round(128 + (21 - 128) * (t * 2));
+      color = `rgb(${r},${g},${b})`;
+    } else {
+      // yellow to red
+      const u = (t - 0.5) * 2;
+      const r = Math.round(250 + (248 - 250) * u);
+      const g = Math.round(204 + (113 - 204) * u);
+      const b = Math.round(21 + (113 - 21) * u);
+      color = `rgb(${r},${g},${b})`;
+    }
+    const x = (i * cellW).toFixed(1);
+    const isActive = activeWeek && e.week === activeWeek;
+    const strokeAttr = isActive
+      ? ' stroke="#fff" stroke-width="1.5"'
+      : "";
+    return (
+      `<rect x="${x}" y="1" width="${(cellW - 1).toFixed(1)}" ` +
+      `height="${height - 2}" fill="${color}"${strokeAttr} ` +
+      `data-week="${e.week}" class="heatmap-cell">` +
+      `<title>${e.week}: \u20ac${Math.round(e.price)}</title>` +
+      `</rect>`
+    );
+  }).join("");
+
+  return (
+    `<svg class="heatmap" viewBox="0 0 ${width} ${height}" ` +
+    `width="${width}" height="${height}" ` +
+    `xmlns="http://www.w3.org/2000/svg" ` +
+    `aria-label="${n} weekend prices, green=cheapest">` +
+    `${cells}</svg>`
+  );
+}
+
 // Render a compact inline SVG sparkline for a list of price
 // observations. Returns "" if there are fewer than 2 points (nothing
 // to draw). Widely supported across browsers; no external lib.
@@ -573,6 +677,15 @@ function renderDealCard(deal, idx) {
   const obs = historyByKey[thisDealKey] || [];
   const sparklineHtml = sparklineSvg(obs);
 
+  // Weekend-comparison heatmap for this destination. Shows up to
+  // 8 weekends of prices for the same IATA, green=cheapest,
+  // red=priciest. Current deal's weekend is outlined in white.
+  // Returns "" if the destination has < 2 weekends of data (e.g.
+  // a route that only runs once a week).
+  const activeWeek = (deal.outbound_departure || "").slice(0, 10);
+  const heatmapEntries = destWeekendMatrix[deal.destination_iata] || [];
+  const heatmapHtml = heatmapSvg(heatmapEntries, activeWeek);
+
   // Compare checkbox state (rendered checked if this deal is in
   // the comparedKeys set).
   const isCompared = comparedKeys.has(thisDealKey);
@@ -583,6 +696,7 @@ function renderDealCard(deal, idx) {
         <div class="city">${deal.destination_city || deal.destination_iata}</div>
         <div class="country">${deal.destination_country || ""} &middot; ${deal.destination_iata}</div>
         ${sparklineHtml ? `<div class="sparkline-wrap" title="60-day price history">${sparklineHtml}</div>` : ""}
+        ${heatmapHtml ? `<div class="heatmap-wrap" title="Prices across upcoming weekends (green = cheapest)">${heatmapHtml}</div>` : ""}
       </div>
       <div class="price-block">
         <label class="compare-check" title="Add to compare (up to ${COMPARE_MAX_ITEMS})">
@@ -653,6 +767,32 @@ function renderDealCard(deal, idx) {
   // firing when the user clicks a hotels/airbnb/activities link.
   li.querySelectorAll(".extras-row a").forEach((a) => {
     a.addEventListener("click", (e) => e.stopPropagation());
+  });
+
+  // Heatmap cell clicks: scroll the sidebar to the card matching
+  // the clicked (destination, week) pair. Lets the user jump
+  // between weekends for the same city without digging through
+  // the sort order.
+  li.querySelectorAll("rect.heatmap-cell").forEach((cell) => {
+    cell.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const targetWeek = cell.getAttribute("data-week");
+      if (!targetWeek) return;
+      // Find the first card in the current sidebar whose deal is
+      // this destination + this weekend.
+      const cards = Array.from(listEl.querySelectorAll(".deal"));
+      const match = cards.find((c) => {
+        const k = c.dataset.dealKey || "";
+        const parts = k.split("|");
+        // dealKey format: carrier|origin|dest|window|outboundDate
+        return parts[2] === deal.destination_iata && parts[4] === targetWeek;
+      });
+      if (match) {
+        match.scrollIntoView({ behavior: "smooth", block: "center" });
+        match.classList.add("highlighted");
+        setTimeout(() => match.classList.remove("highlighted"), 2000);
+      }
+    });
   });
 
   // Compare checkbox: toggle this deal in/out of the compare tray.
@@ -1145,17 +1285,79 @@ async function main() {
     return Array.from(byIata.values());
   }
 
+  // Health classification for the scan freshness badge. Returns
+  // one of: "fresh" (< 2h old), "stale" (2-8h), "very-stale" (> 8h),
+  // "prospects" (crashed and fell back), or "unknown" (no timestamp).
+  //
+  // Cron runs every 6h so anything > 8h old means either the
+  // workflow failed to run (GitHub cron lag is common) or the
+  // scanner crashed hard enough to skip the commit step.
+  function classifyScanHealth(payload) {
+    if (payload.mode === "prospects") return "prospects";
+    if (!payload.generated_at) return "unknown";
+    const now = Date.now();
+    const gen = new Date(payload.generated_at).getTime();
+    if (isNaN(gen)) return "unknown";
+    const ageMinutes = (now - gen) / 60000;
+    if (ageMinutes < 0) return "unknown";  // clock skew / future time
+    if (ageMinutes < 120) return "fresh";
+    if (ageMinutes < 480) return "stale";
+    return "very-stale";
+  }
+
+  // Human-readable "N minutes ago" / "N hours ago" / "N days ago"
+  // for the scan-age tooltip. Nothing fancy -- just enough
+  // granularity to be useful at a glance.
+  function humanAge(iso) {
+    if (!iso) return "unknown";
+    const gen = new Date(iso).getTime();
+    if (isNaN(gen)) return "unknown";
+    const minutes = Math.floor((Date.now() - gen) / 60000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ${hours % 24}h ago`;
+  }
+
   function updateMeta(visibleCount, totalCount) {
+    const health = classifyScanHealth(payload);
+    const age = humanAge(payload.generated_at);
+    const HEALTH_ICONS = {
+      fresh: "\u{1F7E2}",       // green circle
+      stale: "\u{1F7E1}",       // yellow circle
+      "very-stale": "\u{1F534}", // red circle
+      prospects: "\u{1F534}",   // red circle
+      unknown: "\u26AA",         // white circle
+    };
+    const HEALTH_LABEL = {
+      fresh: "FRESH",
+      stale: "STALE",
+      "very-stale": "VERY STALE",
+      prospects: "CRASHED",
+      unknown: "UNKNOWN",
+    };
+    const icon = HEALTH_ICONS[health] || HEALTH_ICONS.unknown;
+    const label = HEALTH_LABEL[health] || "UNKNOWN";
+    const healthBadge =
+      `<span class="scan-health scan-health-${health}" ` +
+      `title="Scan ${age} -- click icon for details">` +
+      `${icon} ${label}` +
+      `</span>`;
+
     if (payload.mode === "prospects") {
       metaEl.innerHTML =
+        `${healthBadge} ` +
         `<b>Prospects mode</b> &middot; ` +
         `<b>${totalCount}</b> route/weekend combos over ${payload.weekends_scanned} weekends &middot; ` +
-        `no live prices or time filter &mdash; click through to check`;
+        `no live prices &mdash; last scan crashed`;
     } else {
       metaEl.innerHTML =
-        `Last scanned <b>${generated}</b> &middot; ` +
-        `<b>${visibleCount}</b> / ${totalCount} deals shown &middot; ` +
-        `Dublin bus fare &euro;${payload.bus_return_cost_eur} <span class="muted">(not in price)</span>`;
+        `${healthBadge} ` +
+        `Scanned <b>${age}</b> &middot; ` +
+        `<b>${visibleCount}</b> / ${totalCount} deals &middot; ` +
+        `Dublin bus &euro;${payload.bus_return_cost_eur} <span class="muted">(not in price)</span>`;
     }
   }
 
@@ -1320,6 +1522,12 @@ async function main() {
   function render() {
     const f = currentFilters();
     const filtered = applyFilters(payload.deals, f);
+    // Rebuild the per-destination weekend price matrix BEFORE
+    // rendering the sidebar so renderDealCard() sees the current
+    // filtered view's prices. Computed from `filtered` (not the
+    // full payload) so the min/max colouring reflects what the
+    // user is actually looking at.
+    destWeekendMatrix = buildDestWeekendMatrix(filtered);
     updateMeta(filtered.length, payload.deals.length);
     renderWindowChips();
     renderRegionChips();

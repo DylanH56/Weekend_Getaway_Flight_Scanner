@@ -868,6 +868,58 @@ main {
   display: block;
 }
 
+/* ---------- Weekend heatmap (price comparison across weekends) ---------- */
+.heatmap-wrap {
+  margin-top: 4px;
+  line-height: 0;
+}
+.heatmap {
+  display: block;
+}
+.heatmap-cell {
+  cursor: pointer;
+  transition: opacity .15s;
+}
+.heatmap-cell:hover {
+  opacity: 0.8;
+}
+
+/* ---------- Scan health badge (in the header meta line) ---------- */
+.scan-health {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-right: 4px;
+  vertical-align: middle;
+  border: 1px solid transparent;
+  cursor: help;
+}
+.scan-health-fresh {
+  background: rgba(74, 222, 128, .15);
+  color: #86efac;
+  border-color: rgba(74, 222, 128, .4);
+}
+.scan-health-stale {
+  background: rgba(250, 204, 21, .12);
+  color: #fde047;
+  border-color: rgba(250, 204, 21, .4);
+}
+.scan-health-very-stale,
+.scan-health-prospects {
+  background: rgba(248, 113, 113, .12);
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, .4);
+}
+.scan-health-unknown {
+  background: rgba(148, 163, 184, .12);
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, .4);
+}
+
 /* ---------- Compare checkbox (on each card) ---------- */
 .compare-check {
   display: inline-flex;

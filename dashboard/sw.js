@@ -26,7 +26,7 @@
 // Bump this whenever the dashboard shell (html/css/js) changes so
 // users pick up the new files on next reload. Old caches get pruned
 // in the activate hook.
-const CACHE_VERSION = "v8-title-fix";
+const CACHE_VERSION = "v9-health-heatmap";
 const SHELL_CACHE = `shell-${CACHE_VERSION}`;
 const DATA_CACHE = `data-${CACHE_VERSION}`;
 const PHOTO_CACHE = `photos-${CACHE_VERSION}`;
