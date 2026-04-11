@@ -107,10 +107,20 @@ jobs:
 
       - name: Run scanner
         env:
-          # Both are optional -- missing secret/var => scanner simply
-          # skips the Discord notification step with a no-op log line.
+          # All optional -- missing secret/var => scanner silently
+          # skips whatever that variable controls. Every carrier
+          # opt-in AND the Discord webhook live here.
           NOTIFY_DISCORD_WEBHOOK_URL: ${{ secrets.NOTIFY_DISCORD_WEBHOOK_URL }}
           NOTIFY_PRICE_CAP_EUR: ${{ vars.NOTIFY_PRICE_CAP_EUR }}
+          # Opt-in carrier toggles. GitHub Actions does NOT auto-
+          # expose repo variables to a step's environment -- each
+          # variable has to be listed here explicitly. Set these as
+          # repo Variables (Settings -> Secrets and variables ->
+          # Actions -> Variables tab) to turn on a carrier. Delete
+          # the variable to turn it off again.
+          ENABLE_EASYJET: ${{ vars.ENABLE_EASYJET }}
+          ENABLE_WIZZAIR: ${{ vars.ENABLE_WIZZAIR }}
+          DISABLE_AER_LINGUS: ${{ vars.DISABLE_AER_LINGUS }}
         run: |
           if [ "${{ github.event.inputs.test_notification }}" = "true" ]; then
             echo "::notice::Running in test-notification mode -- no scan, just a fake Discord message."

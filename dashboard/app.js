@@ -1222,6 +1222,12 @@ async function main() {
     }
     const sorted = sortDeals(list, sortMode);
 
+    // Default sidebar title when no destination is pinned. Matches
+    // the HTML so the title reads "Trip Ideas" at rest and changes
+    // to "<City> (IATA)" when the user pins a destination via the
+    // map marker. Single source of truth -- any future rename only
+    // has to touch this constant.
+    const DEFAULT_TITLE = "Trip Ideas";
     const titleEl = $("deals-title");
     if (selectedDestination) {
       const sample = sorted[0];
@@ -1229,7 +1235,7 @@ async function main() {
       titleEl.textContent = `${city} (${selectedDestination})`;
       $("clear-destination").style.display = "block";
     } else {
-      titleEl.textContent = `Deals`;
+      titleEl.textContent = DEFAULT_TITLE;
       $("clear-destination").style.display = "none";
     }
 
