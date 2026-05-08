@@ -389,6 +389,14 @@
 "url":"https://upload.wikimedia.org/wikipedia/commons/thumb/d/d9/Stary_Rynek_w_Poznaniu%2C_widok_z_drona_%28cropped%29.jpg/330px-Stary_Rynek_w_Poznaniu%2C_widok_z_drona_%28cropped%29.jpg",
 "width":330
 },
+"RAK":{
+"attribution":"Wikipedia",
+"fetched_at":"2026-05-08T07:56:12.744930+00:00",
+"height":219,
+"page_url":"https://en.wikipedia.org/wiki/Marrakesh",
+"url":"https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/Pavillon_Menarag%C3%A4rten.jpg/330px-Pavillon_Menarag%C3%A4rten.jpg",
+"width":330
+},
 "REU":{
 "attribution":"Wikipedia",
 "fetched_at":"2026-04-10T23:56:38.101558+00:00",
