@@ -1,5 +1,5 @@
 # last_scan_log.txt
-# Generated: 2026-05-30T19:40:11.198625+00:00
+# Generated: 2026-05-31T04:48:10.085213+00:00
 # Scanner exit code: 0
 # Python: 3.11.15
 # curl_cffi: 0.15.0 (available=False)
@@ -51,7 +51,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
     "flightKey": "FR~3258~ ~~SNN~06/05/2026 22:50~BHX~06/06/2026 00:05~~",
     "flightNumber": "FR3258",
     "previousPrice": null,
-    "priceUpdated": 1780165647000
+    "priceUpdated": 1780199844000
   },
   "inbound": {
     "departureAirport": {
@@ -79,22 +79,22 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
     "departureDate": "2026-06-07T15:15:00",
     "arrivalDate": "2026-06-07T16:35:00",
     "price": {
-      "value": 15.59,
-      "valueMainUnit": "15",
-      "valueFractionalUnit": "59",
+      "value": 14.99,
+      "valueMainUnit": "14",
+      "valueFractionalUnit": "99",
       "currencyCode": "EUR",
       "currencySymbol": "\u20ac"
     },
     "flightKey": "FR~3257~ ~~BHX~06/07/2026 15:15~SNN~06/07/2026 16:35~~",
     "flightNumber": "FR3257",
     "previousPrice": null,
-    "priceUpdated": 1780165945000
+    "priceUpdated": 1780198223000
   },
   "summary": {
     "price": {
-      "value": 30.58,
-      "valueMainUnit": "30",
-      "valueFractionalUnit": "58",
+      "value": 29.98,
+      "valueMainUnit": "29",
+      "valueFractionalUnit": "98",
       "currencyCode": "EUR",
       "currencySymbol": "\u20ac"
     },
@@ -105,7 +105,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
 }
 --- end sample ---
 
-  ryanair SNN fri_sun 2026-06-05->2026-06-07: 5 fares, 3 parsed, 3 under cap
+  ryanair SNN fri_sun 2026-06-05->2026-06-07: 4 fares, 3 parsed, 3 under cap
   ryanair SNN fri_sun 2026-06-12->2026-06-14: 5 fares, 3 parsed, 3 under cap
   ryanair SNN fri_sun 2026-06-19->2026-06-21: 5 fares, 3 parsed, 3 under cap
   ryanair SNN fri_sun 2026-06-26->2026-06-28: 5 fares, 3 parsed, 3 under cap
@@ -114,7 +114,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
   ryanair SNN fri_sun 2026-07-17->2026-07-19: 9 fares, 3 parsed, 3 under cap
   ryanair SNN fri_sun 2026-07-24->2026-07-26: 9 fares, 3 parsed, 3 under cap
   ryanair SNN fri_sun 2026-07-31->2026-08-02: 8 fares, 4 parsed, 4 under cap
-  ryanair SNN fri_mon 2026-07-31->2026-08-03: 5 fares, 1 parsed, 1 under cap
+  ryanair SNN fri_mon 2026-07-31->2026-08-03: 4 fares, 1 parsed, 1 under cap
   ryanair SNN fri_sun 2026-08-07->2026-08-09: 9 fares, 3 parsed, 3 under cap
   ryanair SNN fri_sun 2026-08-14->2026-08-16: 9 fares, 3 parsed, 3 under cap
   ryanair SNN fri_sun 2026-08-21->2026-08-23: 10 fares, 3 parsed, 3 under cap
@@ -139,7 +139,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
   ryanair SNN fri_sun 2026-12-25->2026-12-27: 0 fares, 0 parsed, 0 under cap
   ryanair SNN thu_sun 2026-12-24->2026-12-27: 3 fares, 1 parsed, 1 under cap
   ryanair SNN fri_sun 2027-01-01->2027-01-03: 6 fares, 0 parsed, 0 under cap
-  ryanair SNN thu_sun 2026-12-31->2027-01-03: 3 fares, 1 parsed, 1 under cap
+  ryanair SNN thu_sun 2026-12-31->2027-01-03: 3 fares, 0 parsed, 0 under cap
   ryanair SNN fri_sun 2027-01-08->2027-01-10: 9 fares, 0 parsed, 0 under cap
   ryanair SNN fri_sun 2027-01-15->2027-01-17: 9 fares, 0 parsed, 0 under cap
   ryanair SNN fri_sun 2027-01-22->2027-01-24: 9 fares, 0 parsed, 0 under cap
@@ -150,48 +150,48 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
   ryanair SNN fri_sun 2027-02-19->2027-02-21: 6 fares, 0 parsed, 0 under cap
   ryanair SNN fri_sun 2027-02-26->2027-02-28: 9 fares, 0 parsed, 0 under cap
   ryanair DUB fri_sun 2026-06-05->2026-06-07: 19 fares, 2 parsed, 2 under cap
-  ryanair DUB fri_sun 2026-06-12->2026-06-14: 21 fares, 3 parsed, 3 under cap
-  ryanair DUB fri_sun 2026-06-19->2026-06-21: 23 fares, 6 parsed, 6 under cap
-  ryanair DUB fri_sun 2026-06-26->2026-06-28: 20 fares, 3 parsed, 3 under cap
+  ryanair DUB fri_sun 2026-06-12->2026-06-14: 19 fares, 2 parsed, 2 under cap
+  ryanair DUB fri_sun 2026-06-19->2026-06-21: 23 fares, 7 parsed, 7 under cap
+  ryanair DUB fri_sun 2026-06-26->2026-06-28: 19 fares, 3 parsed, 3 under cap
   ryanair DUB fri_sun 2026-07-03->2026-07-05: 23 fares, 4 parsed, 4 under cap
-  ryanair DUB fri_sun 2026-07-10->2026-07-12: 24 fares, 6 parsed, 6 under cap
-  ryanair DUB fri_sun 2026-07-17->2026-07-19: 25 fares, 8 parsed, 8 under cap
-  ryanair DUB fri_sun 2026-07-24->2026-07-26: 37 fares, 15 parsed, 15 under cap
-  ryanair DUB fri_sun 2026-07-31->2026-08-02: 26 fares, 8 parsed, 8 under cap
-  ryanair DUB fri_mon 2026-07-31->2026-08-03: 28 fares, 3 parsed, 3 under cap
+  ryanair DUB fri_sun 2026-07-10->2026-07-12: 23 fares, 6 parsed, 6 under cap
+  ryanair DUB fri_sun 2026-07-17->2026-07-19: 25 fares, 9 parsed, 9 under cap
+  ryanair DUB fri_sun 2026-07-24->2026-07-26: 37 fares, 14 parsed, 14 under cap
+  ryanair DUB fri_sun 2026-07-31->2026-08-02: 25 fares, 6 parsed, 6 under cap
+  ryanair DUB fri_mon 2026-07-31->2026-08-03: 28 fares, 2 parsed, 2 under cap
   ryanair DUB fri_sun 2026-08-07->2026-08-09: 33 fares, 7 parsed, 7 under cap
   ryanair DUB fri_sun 2026-08-14->2026-08-16: 33 fares, 9 parsed, 9 under cap
   ryanair DUB fri_sun 2026-08-21->2026-08-23: 39 fares, 14 parsed, 14 under cap
-  ryanair DUB fri_sun 2026-08-28->2026-08-30: 47 fares, 15 parsed, 15 under cap
+  ryanair DUB fri_sun 2026-08-28->2026-08-30: 47 fares, 16 parsed, 16 under cap
   ryanair DUB fri_sun 2026-09-04->2026-09-06: 36 fares, 12 parsed, 12 under cap
   ryanair DUB fri_sun 2026-09-11->2026-09-13: 38 fares, 11 parsed, 11 under cap
-  ryanair DUB fri_sun 2026-09-18->2026-09-20: 41 fares, 12 parsed, 12 under cap
+  ryanair DUB fri_sun 2026-09-18->2026-09-20: 41 fares, 11 parsed, 11 under cap
   ryanair DUB fri_sun 2026-09-25->2026-09-27: 37 fares, 10 parsed, 10 under cap
-  ryanair DUB fri_sun 2026-10-02->2026-10-04: 41 fares, 14 parsed, 14 under cap
-  ryanair DUB fri_sun 2026-10-09->2026-10-11: 39 fares, 14 parsed, 14 under cap
-  ryanair DUB fri_sun 2026-10-16->2026-10-18: 48 fares, 18 parsed, 18 under cap
+  ryanair DUB fri_sun 2026-10-02->2026-10-04: 41 fares, 13 parsed, 13 under cap
+  ryanair DUB fri_sun 2026-10-09->2026-10-11: 39 fares, 13 parsed, 13 under cap
+  ryanair DUB fri_sun 2026-10-16->2026-10-18: 48 fares, 19 parsed, 19 under cap
   ryanair DUB fri_sun 2026-10-23->2026-10-25: 35 fares, 9 parsed, 9 under cap
   ryanair DUB fri_mon 2026-10-23->2026-10-26: 31 fares, 5 parsed, 5 under cap
-  ryanair DUB fri_sun 2026-10-30->2026-11-01: 38 fares, 11 parsed, 11 under cap
-  ryanair DUB fri_sun 2026-11-06->2026-11-08: 45 fares, 10 parsed, 10 under cap
-  ryanair DUB fri_sun 2026-11-13->2026-11-15: 48 fares, 18 parsed, 18 under cap
-  ryanair DUB fri_sun 2026-11-20->2026-11-22: 49 fares, 14 parsed, 14 under cap
-  ryanair DUB fri_sun 2026-11-27->2026-11-29: 45 fares, 12 parsed, 12 under cap
-  ryanair DUB fri_sun 2026-12-04->2026-12-06: 46 fares, 15 parsed, 15 under cap
-  ryanair DUB fri_sun 2026-12-11->2026-12-13: 50 fares, 17 parsed, 17 under cap
-  ryanair DUB fri_sun 2026-12-18->2026-12-20: 21 fares, 4 parsed, 4 under cap
+  ryanair DUB fri_sun 2026-10-30->2026-11-01: 38 fares, 9 parsed, 9 under cap
+  ryanair DUB fri_sun 2026-11-06->2026-11-08: 45 fares, 13 parsed, 13 under cap
+  ryanair DUB fri_sun 2026-11-13->2026-11-15: 48 fares, 19 parsed, 19 under cap
+  ryanair DUB fri_sun 2026-11-20->2026-11-22: 49 fares, 12 parsed, 12 under cap
+  ryanair DUB fri_sun 2026-11-27->2026-11-29: 45 fares, 13 parsed, 13 under cap
+  ryanair DUB fri_sun 2026-12-04->2026-12-06: 46 fares, 14 parsed, 14 under cap
+  ryanair DUB fri_sun 2026-12-11->2026-12-13: 50 fares, 16 parsed, 16 under cap
+  ryanair DUB fri_sun 2026-12-18->2026-12-20: 21 fares, 3 parsed, 3 under cap
   ryanair DUB fri_sun 2026-12-25->2026-12-27: 0 fares, 0 parsed, 0 under cap
   ryanair DUB thu_sun 2026-12-24->2026-12-27: 16 fares, 1 parsed, 1 under cap
   ryanair DUB fri_sun 2027-01-01->2027-01-03: 19 fares, 2 parsed, 2 under cap
   ryanair DUB thu_sun 2026-12-31->2027-01-03: 15 fares, 3 parsed, 3 under cap
-  ryanair DUB fri_sun 2027-01-08->2027-01-10: 49 fares, 15 parsed, 15 under cap
-  ryanair DUB fri_sun 2027-01-15->2027-01-17: 55 fares, 16 parsed, 16 under cap
+  ryanair DUB fri_sun 2027-01-08->2027-01-10: 49 fares, 12 parsed, 12 under cap
+  ryanair DUB fri_sun 2027-01-15->2027-01-17: 55 fares, 19 parsed, 19 under cap
   ryanair DUB fri_sun 2027-01-22->2027-01-24: 55 fares, 17 parsed, 17 under cap
-  ryanair DUB fri_sun 2027-01-29->2027-01-31: 50 fares, 17 parsed, 17 under cap
+  ryanair DUB fri_sun 2027-01-29->2027-01-31: 50 fares, 16 parsed, 16 under cap
   ryanair DUB fri_mon 2027-01-29->2027-02-01: 47 fares, 7 parsed, 7 under cap
-  ryanair DUB fri_sun 2027-02-05->2027-02-07: 45 fares, 17 parsed, 17 under cap
-  ryanair DUB fri_sun 2027-02-12->2027-02-14: 37 fares, 14 parsed, 14 under cap
-  ryanair DUB fri_sun 2027-02-19->2027-02-21: 32 fares, 13 parsed, 13 under cap
+  ryanair DUB fri_sun 2027-02-05->2027-02-07: 45 fares, 16 parsed, 16 under cap
+  ryanair DUB fri_sun 2027-02-12->2027-02-14: 37 fares, 16 parsed, 16 under cap
+  ryanair DUB fri_sun 2027-02-19->2027-02-21: 32 fares, 11 parsed, 11 under cap
   ryanair DUB fri_sun 2027-02-26->2027-02-28: 51 fares, 11 parsed, 11 under cap
   ryanair BHX fri_sun 2026-06-05->2026-06-07: 16 fares, 3 parsed, 3 under cap
   ryanair BHX fri_sun 2026-06-12->2026-06-14: 15 fares, 7 parsed, 7 under cap
@@ -200,7 +200,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
   ryanair BHX fri_sun 2026-07-03->2026-07-05: 18 fares, 5 parsed, 5 under cap
   ryanair BHX fri_sun 2026-07-10->2026-07-12: 18 fares, 6 parsed, 6 under cap
   ryanair BHX fri_sun 2026-07-17->2026-07-19: 20 fares, 4 parsed, 4 under cap
-  ryanair BHX fri_sun 2026-07-24->2026-07-26: 18 fares, 5 parsed, 5 under cap
+  ryanair BHX fri_sun 2026-07-24->2026-07-26: 18 fares, 4 parsed, 4 under cap
   ryanair BHX fri_sun 2026-07-31->2026-08-02: 16 fares, 5 parsed, 5 under cap
   ryanair BHX fri_mon 2026-07-31->2026-08-03: 15 fares, 0 parsed, 0 under cap
   ryanair BHX fri_sun 2026-08-07->2026-08-09: 18 fares, 5 parsed, 5 under cap
@@ -216,27 +216,27 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
   ryanair BHX fri_sun 2026-10-16->2026-10-18: 11 fares, 6 parsed, 6 under cap
   ryanair BHX fri_sun 2026-10-23->2026-10-25: 10 fares, 1 parsed, 1 under cap
   ryanair BHX fri_mon 2026-10-23->2026-10-26: 13 fares, 4 parsed, 4 under cap
-  ryanair BHX fri_sun 2026-10-30->2026-11-01: 14 fares, 2 parsed, 2 under cap
-  ryanair BHX fri_sun 2026-11-06->2026-11-08: 17 fares, 1 parsed, 1 under cap
+  ryanair BHX fri_sun 2026-10-30->2026-11-01: 13 fares, 2 parsed, 2 under cap
+  ryanair BHX fri_sun 2026-11-06->2026-11-08: 17 fares, 2 parsed, 2 under cap
   ryanair BHX fri_sun 2026-11-13->2026-11-15: 18 fares, 2 parsed, 2 under cap
   ryanair BHX fri_sun 2026-11-20->2026-11-22: 20 fares, 2 parsed, 2 under cap
   ryanair BHX fri_sun 2026-11-27->2026-11-29: 18 fares, 1 parsed, 1 under cap
-  ryanair BHX fri_sun 2026-12-04->2026-12-06: 19 fares, 1 parsed, 1 under cap
+  ryanair BHX fri_sun 2026-12-04->2026-12-06: 19 fares, 2 parsed, 2 under cap
   ryanair BHX fri_sun 2026-12-11->2026-12-13: 19 fares, 1 parsed, 1 under cap
   ryanair BHX fri_sun 2026-12-18->2026-12-20: 12 fares, 1 parsed, 1 under cap
   ryanair BHX fri_sun 2026-12-25->2026-12-27: 0 fares, 0 parsed, 0 under cap
   ryanair BHX thu_sun 2026-12-24->2026-12-27: 4 fares, 0 parsed, 0 under cap
   ryanair BHX fri_sun 2027-01-01->2027-01-03: 11 fares, 0 parsed, 0 under cap
   ryanair BHX thu_sun 2026-12-31->2027-01-03: 6 fares, 1 parsed, 1 under cap
-  ryanair BHX fri_sun 2027-01-08->2027-01-10: 21 fares, 2 parsed, 2 under cap
-  ryanair BHX fri_sun 2027-01-15->2027-01-17: 21 fares, 1 parsed, 1 under cap
-  ryanair BHX fri_sun 2027-01-22->2027-01-24: 21 fares, 3 parsed, 3 under cap
-  ryanair BHX fri_sun 2027-01-29->2027-01-31: 21 fares, 3 parsed, 3 under cap
+  ryanair BHX fri_sun 2027-01-08->2027-01-10: 21 fares, 1 parsed, 1 under cap
+  ryanair BHX fri_sun 2027-01-15->2027-01-17: 21 fares, 2 parsed, 2 under cap
+  ryanair BHX fri_sun 2027-01-22->2027-01-24: 21 fares, 2 parsed, 2 under cap
+  ryanair BHX fri_sun 2027-01-29->2027-01-31: 21 fares, 2 parsed, 2 under cap
   ryanair BHX fri_mon 2027-01-29->2027-02-01: 19 fares, 4 parsed, 4 under cap
   ryanair BHX fri_sun 2027-02-05->2027-02-07: 18 fares, 1 parsed, 1 under cap
   ryanair BHX fri_sun 2027-02-12->2027-02-14: 15 fares, 2 parsed, 2 under cap
   ryanair BHX fri_sun 2027-02-19->2027-02-21: 15 fares, 1 parsed, 1 under cap
-  ryanair BHX fri_sun 2027-02-26->2027-02-28: 18 fares, 3 parsed, 3 under cap
+  ryanair BHX fri_sun 2027-02-26->2027-02-28: 18 fares, 2 parsed, 2 under cap
   (aer_lingus scans 3 window-weekends: Weekend (Fri → Sun) x 3 weekends)
 
 --- Aer Lingus (EI) ---
@@ -246,7 +246,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
 {
   "_origin": "SNN",
   "_destination": "LHR",
-  "_total_price": 185.15,
+  "_total_price": 183.75,
   "_outbound_flight": {
     "totalDuration": "1h25m",
     "priceInfo": {
@@ -255,10 +255,10 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "1",
           "type": "low",
-          "price": 69.54,
+          "price": 67.28,
           "discount": 0,
-          "fullPrice": 69.54,
-          "seats": 21,
+          "fullPrice": 67.28,
+          "seats": 22,
           "basisCodes": [
             {
               "basisCode": "GOW23",
@@ -270,10 +270,10 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "2",
           "type": "plus",
-          "price": 109.54,
+          "price": 107.28,
           "discount": 0,
-          "fullPrice": 109.54,
-          "seats": 21,
+          "fullPrice": 107.28,
+          "seats": 22,
           "basisCodes": [
             {
               "basisCode": "GA23PLUS",
@@ -285,10 +285,10 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "3",
           "type": "flex",
-          "price": 141.75,
+          "price": 140.52,
           "discount": 0,
-          "fullPrice": 141.75,
-          "seats": 21,
+          "fullPrice": 140.52,
+          "seats": 22,
           "basisCodes": [
             {
               "basisCode": "GA23FLEX",
@@ -298,7 +298,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
         },
         {
           "isSelected": null,
-          "id": "6",
+          "id": "4",
           "type": "aerspace",
           "price": 155.65,
           "discount": 0,
@@ -357,10 +357,10 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "13",
           "type": "low",
-          "price": 115.61,
+          "price": 116.47,
           "discount": 0,
-          "fullPrice": 115.61,
-          "seats": 3,
+          "fullPrice": 116.47,
+          "seats": 2,
           "basisCodes": [
             {
               "basisCode": "ZOW23",
@@ -379,10 +379,10 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
   aer_lingus SNN fri_sun 2026-06-12->2026-06-14: 1 fares, 1 parsed, 1 under cap
   aer_lingus SNN fri_sun 2026-06-19->2026-06-21: 1 fares, 1 parsed, 1 under cap
   [warn] aer_lingus DUB->LGW: HTTP 400 (body='{}')
-  aer_lingus DUB fri_sun 2026-06-05->2026-06-07: 6 fares, 1 parsed, 0 under cap
+  aer_lingus DUB fri_sun 2026-06-05->2026-06-07: 6 fares, 0 parsed, 0 under cap
   [info] aer_lingus DUB->LGW: 2 consecutive failures, skipping this route for the rest of the run.
   aer_lingus DUB fri_sun 2026-06-12->2026-06-14: 6 fares, 1 parsed, 0 under cap
-  aer_lingus DUB fri_sun 2026-06-19->2026-06-21: 6 fares, 1 parsed, 0 under cap
+  aer_lingus DUB fri_sun 2026-06-19->2026-06-21: 6 fares, 1 parsed, 1 under cap
   aer_lingus BHX fri_sun 2026-06-05->2026-06-07: 0 fares, 0 parsed, 0 under cap
   aer_lingus BHX fri_sun 2026-06-12->2026-06-14: 0 fares, 0 parsed, 0 under cap
   aer_lingus BHX fri_sun 2026-06-19->2026-06-21: 0 fares, 0 parsed, 0 under cap
@@ -415,19 +415,19 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
   wizzair BHX fri_sun 2026-06-19->2026-06-21: 0 fares, 0 parsed, 0 under cap
 
 === Scan summary ===
-  Ryanair (FR): 132 calls, 132 ok, 0 failed, 645 deals under cap.
-  Aer Lingus (EI): 9 calls, 9 ok, 0 failed, 2 deals under cap.
+  Ryanair (FR): 132 calls, 132 ok, 0 failed, 634 deals under cap.
+  Aer Lingus (EI): 9 calls, 9 ok, 0 failed, 3 deals under cap.
   easyJet (U2): 9 calls, 9 ok, 0 failed, 0 deals under cap.
   Wizz Air (W6): 9 calls, 9 ok, 0 failed, 0 deals under cap.
-  TOTAL: 159 calls, 647 raw deals under cap.
-Parse rejections: outside_evening_window=1930, unknown_destination=17
-Price history: 246 at-or-below lowest ever, 39 price drops since last scan.
-  [enrich] starting photo + weather enrichment (curl_cffi_available=False, 647 deals, budget=90s)...
+  TOTAL: 159 calls, 637 raw deals under cap.
+Parse rejections: outside_evening_window=1934, unknown_destination=17
+Price history: 240 at-or-below lowest ever, 55 price drops since last scan.
+  [enrich] starting photo + weather enrichment (curl_cffi_available=False, 637 deals, budget=90s)...
   [enrich] photos done at +0.0s
   [weather] error: int() argument must be a string, a bytes-like object or a real number, not 'NoneType'
-  [enrich] total time: 6.6s (all calls completed within budget)
-  [notify] Discord: posted 7 deal(s)
-  [notify] posted 7 newly-alertable deal(s) <= EUR 80
-  [notify] posted 239 lowest-ever alert(s)
+  [enrich] total time: 0.9s (all calls completed within budget)
+  [notify] Discord: posted 6 deal(s)
+  [notify] posted 6 newly-alertable deal(s) <= EUR 80
+  [notify] posted 235 lowest-ever alert(s)
 
-Wrote 647 deals to /home/runner/work/Weekend_Getaway_Flight_Scanner/Weekend_Getaway_Flight_Scanner/dashboard/deals.json
+Wrote 637 deals to /home/runner/work/Weekend_Getaway_Flight_Scanner/Weekend_Getaway_Flight_Scanner/dashboard/deals.json
