@@ -1,5 +1,5 @@
 # last_scan_log.txt
-# Generated: 2026-06-02T21:21:23.166350+00:00
+# Generated: 2026-06-03T05:06:15.552142+00:00
 # Scanner exit code: 0
 # Python: 3.11.15
 # curl_cffi: 0.15.0 (available=False)
@@ -154,7 +154,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
 {
   "_origin": "SNN",
   "_destination": "LHR",
-  "_total_price": 163.63,
+  "_total_price": 184.21,
   "_outbound_flight": {
     "totalDuration": "1h25m",
     "priceInfo": {
@@ -163,13 +163,13 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "1",
           "type": "low",
-          "price": 66.05,
+          "price": 77.65,
           "discount": 0,
-          "fullPrice": 66.05,
-          "seats": 30,
+          "fullPrice": 77.65,
+          "seats": 31,
           "basisCodes": [
             {
-              "basisCode": "POW23",
+              "basisCode": "OOW23",
               "flightNumber": "EI388"
             }
           ]
@@ -178,13 +178,13 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "2",
           "type": "plus",
-          "price": 106.05,
+          "price": 117.65,
           "discount": 0,
-          "fullPrice": 106.05,
-          "seats": 30,
+          "fullPrice": 117.65,
+          "seats": 31,
           "basisCodes": [
             {
-              "basisCode": "PA23PLUS",
+              "basisCode": "OA23PLUS",
               "flightNumber": "EI388"
             }
           ]
@@ -193,13 +193,13 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "3",
           "type": "flex",
-          "price": 134.05,
+          "price": 150.65,
           "discount": 0,
-          "fullPrice": 134.05,
-          "seats": 30,
+          "fullPrice": 150.65,
+          "seats": 31,
           "basisCodes": [
             {
-              "basisCode": "PA23FLEX",
+              "basisCode": "OA23FLEX",
               "flightNumber": "EI388"
             }
           ]
@@ -208,13 +208,13 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "4",
           "type": "aerspace",
-          "price": 155.65,
+          "price": 167.65,
           "discount": 0,
-          "fullPrice": 155.65,
+          "fullPrice": 167.65,
           "seats": 3,
           "basisCodes": [
             {
-              "basisCode": "I23PAESP",
+              "basisCode": "I23ZAESP",
               "flightNumber": "EI388"
             }
           ]
@@ -265,13 +265,13 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
           "isSelected": null,
           "id": "13",
           "type": "low",
-          "price": 97.58,
+          "price": 106.56,
           "discount": 0,
-          "fullPrice": 97.58,
-          "seats": 2,
+          "fullPrice": 106.56,
+          "seats": 3,
           "basisCodes": [
             {
-              "basisCode": "POW23",
+              "basisCode": "ZOW23",
               "flightNumber": "EI385"
             }
           ]
@@ -279,7 +279,7 @@ Base weekend windows: Weekend (Fri → Sun), Long weekend (Fri → Mon), Long we
         {
           "isSelected": null,
           "id": "14",
-          "type": "p
+          "type": 
   ...(truncated)
 --- end sample ---
 
@@ -333,8 +333,8 @@ Parse rejections: outside_evening_window=19
 Price history: 0 at-or-below lowest ever, 1 price drops since last scan.
   [enrich] starting photo + weather enrichment (curl_cffi_available=False, 1 deals, budget=90s)...
   [enrich] photos done at +0.0s
-  [enrich] weather done at +0.0s
-  [enrich] total time: 0.0s (all calls completed within budget)
-  [notify] no newly-alertable deals <= EUR 80 and no new lowest-ever prices (compared against 613 prior deals)
+  [enrich] weather done at +0.4s
+  [enrich] total time: 0.4s (all calls completed within budget)
+  [notify] no newly-alertable deals <= EUR 80 and no new lowest-ever prices (compared against 1 prior deals)
 
 Wrote 1 deals to /home/runner/work/Weekend_Getaway_Flight_Scanner/Weekend_Getaway_Flight_Scanner/dashboard/deals.json
