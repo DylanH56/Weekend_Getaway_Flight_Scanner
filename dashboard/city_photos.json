@@ -290,6 +290,14 @@
 "url":"https://upload.wikimedia.org/wikipedia/commons/thumb/6/67/London_Skyline_%28125508655%29.jpeg/330px-London_Skyline_%28125508655%29.jpeg",
 "width":330
 },
+"LUX":{
+"attribution":"Wikipedia",
+"fetched_at":"2026-09-23T11:26:06.397520+00:00",
+"height":220,
+"page_url":"https://en.wikipedia.org/wiki/Luxembourg_City",
+"url":"https://thumb.wikimedia.org/wikipedia/commons/thumb/d/db/Luxembourg_Grand_Ducal_Palace_01.jpg/330px-Luxembourg_Grand_Ducal_Palace_01.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+"width":330
+},
 "MAD":{
 "attribution":"Wikipedia",
 "fetched_at":"2026-04-10T23:56:36.911684+00:00",
