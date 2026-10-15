@@ -485,6 +485,14 @@
 "url":"https://upload.wikimedia.org/wikipedia/commons/thumb/f/f7/Toulouse_-_vue_du_Vieux_Toulouse_depuis_St_Sernin_06.jpg/330px-Toulouse_-_vue_du_Vieux_Toulouse_depuis_St_Sernin_06.jpg",
 "width":330
 },
+"TRN":{
+"attribution":"Wikipedia",
+"fetched_at":"2026-10-15T11:20:12.021731+00:00",
+"height":166,
+"page_url":"https://en.wikipedia.org/wiki/Turin",
+"url":"https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ae/Torino_Piazza_Castello_11.jpg/330px-Torino_Piazza_Castello_11.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+"width":330
+},
 "VCE":{
 "attribution":"Wikipedia",
 "fetched_at":"2026-04-10T23:56:38.797627+00:00",
