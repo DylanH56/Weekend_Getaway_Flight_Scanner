@@ -477,6 +477,14 @@
 "url":"https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Sevilla_Cathedral_-_Southeast.jpg/330px-Sevilla_Cathedral_-_Southeast.jpg",
 "width":330
 },
+"TFS":{
+"attribution":"Wikipedia",
+"fetched_at":"2026-10-19T22:17:57.939003+00:00",
+"height":330,
+"page_url":"https://en.wikipedia.org/wiki/Tenerife",
+"url":"https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b6/Tenerife%2C_Canary_Islands_ESA23970088.jpeg/330px-Tenerife%2C_Canary_Islands_ESA23970088.jpeg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+"width":330
+},
 "TLS":{
 "attribution":"Wikipedia",
 "fetched_at":"2026-04-10T23:56:36.038803+00:00",
