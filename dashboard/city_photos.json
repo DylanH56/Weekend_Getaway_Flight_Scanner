@@ -397,6 +397,14 @@
 "url":"https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Kathedrale_von_Palma.jpg/330px-Kathedrale_von_Palma.jpg",
 "width":330
 },
+"PMO":{
+"attribution":"Wikipedia",
+"fetched_at":"2026-10-20T16:51:44.453600+00:00",
+"height":360,
+"page_url":"https://en.wikipedia.org/wiki/Palermo",
+"url":"https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c7/Sicilia_Palermo5_tango7174.jpg/330px-Sicilia_Palermo5_tango7174.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+"width":330
+},
 "POZ":{
 "attribution":"Wikipedia",
 "fetched_at":"2026-04-10T23:56:37.156534+00:00",
