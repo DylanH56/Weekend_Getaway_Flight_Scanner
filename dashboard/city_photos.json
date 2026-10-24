@@ -493,6 +493,14 @@
 "url":"https://thumb.wikimedia.org/wikipedia/commons/thumb/b/b6/Tenerife%2C_Canary_Islands_ESA23970088.jpeg/330px-Tenerife%2C_Canary_Islands_ESA23970088.jpeg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
 "width":330
 },
+"TIA":{
+"attribution":"Wikipedia",
+"fetched_at":"2026-10-24T10:50:12.538285+00:00",
+"height":165,
+"page_url":"https://en.wikipedia.org/wiki/Tirana",
+"url":"https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0d/Skanderbeg_square_tirana_2016.jpg/330px-Skanderbeg_square_tirana_2016.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+"width":330
+},
 "TLS":{
 "attribution":"Wikipedia",
 "fetched_at":"2026-04-10T23:56:36.038803+00:00",
