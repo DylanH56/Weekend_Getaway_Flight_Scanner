@@ -242,6 +242,14 @@
 "url":"https://upload.wikimedia.org/wikipedia/commons/thumb/a/a3/Krakow_Rynek_Glowny_panorama_2.jpg/330px-Krakow_Rynek_Glowny_panorama_2.jpg",
 "width":330
 },
+"KUN":{
+"attribution":"Wikipedia",
+"fetched_at":"2026-11-08T13:15:11.872886+00:00",
+"height":220,
+"page_url":"https://en.wikipedia.org/wiki/Kaunas",
+"url":"https://thumb.wikimedia.org/wikipedia/commons/thumb/f/fb/Kauno_senamiestis_by_Augustas_Didzgalvis.jpg/330px-Kauno_senamiestis_by_Augustas_Didzgalvis.jpg?utm_source=en.wikipedia.org&utm_campaign=api&utm_content=thumbnail",
+"width":330
+},
 "LBA":{
 "attribution":"Wikipedia",
 "fetched_at":"2026-04-10T23:56:35.735047+00:00",
